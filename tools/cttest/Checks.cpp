@@ -862,15 +862,835 @@ int RunGlow( const Perturb& perturb )
 	return g_failures;
 }
 
-#define STUB( name )                                  \
-	int name( const Perturb& )                        \
-	{                                                 \
-		Check( false, #name " not written yet" );     \
-		return 1;                                     \
+
+//===========================================================================
+// Radial profiles about a centre, azimuthally averaged, in rings of one cell.
+//===========================================================================
+namespace
+{
+struct Profile
+{
+	std::vector< double > r, p, bz, chi, beta, rho, rhoV2;
+};
+
+Profile Radial( const Snapshot& s, double cx, double cy, double rMax )
+{
+	const int bins = static_cast< int >( rMax / s.dx );
+	Profile out;
+	std::vector< double > n( bins, 0.0 ), p( bins, 0.0 ), bz( bins, 0.0 ), chi( bins, 0.0 ), beta( bins, 0.0 ),
+		rho( bins, 0.0 ), kin( bins, 0.0 );
+	for( int j = 0; j < s.ny; ++j )
+		for( int i = 0; i < s.nx; ++i )
+		{
+			const double x = ( i + 0.5 ) * s.dx - cx, y = ( j + 0.5 ) * s.dx - cy;
+			const int b    = static_cast< int >( std::sqrt( x * x + y * y ) / s.dx );
+			if( b >= bins )
+				continue;
+			const double pp = s.P( i, j );
+			const double b2 = s.Bx( i, j ) * s.Bx( i, j ) + s.By( i, j ) * s.By( i, j ) + s.Bz( i, j ) * s.Bz( i, j );
+			n[ b ] += 1.0;
+			p[ b ] += pp;
+			bz[ b ] += s.Bz( i, j );
+			chi[ b ] += s.Tracer( i, j, 3 );
+			beta[ b ] += 2.0 * pp / std::max( b2, 1e-30 );
+			rho[ b ] += s.Rho( i, j );
+			kin[ b ] += s.Rho( i, j ) * ( s.U( i, j ) * s.U( i, j ) + s.V( i, j ) * s.V( i, j ) );
+		}
+	for( int b = 0; b < bins; ++b )
+	{
+		if( n[ b ] == 0.0 )
+			continue;
+		out.r.push_back( ( b + 0.5 ) * s.dx );
+		out.p.push_back( p[ b ] / n[ b ] );
+		out.bz.push_back( bz[ b ] / n[ b ] );
+		out.chi.push_back( chi[ b ] / n[ b ] );
+		out.beta.push_back( beta[ b ] / n[ b ] );
+		out.rho.push_back( rho[ b ] / n[ b ] );
+		out.rhoV2.push_back( kin[ b ] / n[ b ] );
 	}
-STUB( RunBalance ) STUB( RunRT ) STUB( RunCusp ) STUB( RunFrozen )
-STUB( RunQuench ) STUB( RunResist ) STUB( RunFloors ) 
-STUB( RunMutation )
+	return out;
+}
+
+double MeanOver( const std::vector< double >& r, const std::vector< double >& v, double lo, double hi )
+{
+	double sum = 0.0, n = 0.0;
+	for( size_t k = 0; k < r.size(); ++k )
+		if( r[ k ] >= lo && r[ k ] <= hi )
+		{
+			sum += v[ k ];
+			n += 1.0;
+		}
+	return n > 0.0 ? sum / n : 0.0;
+}
+
+/// Where v first falls through `level` going outwards, interpolated.
+double Crossing( const std::vector< double >& r, const std::vector< double >& v, double level )
+{
+	for( size_t k = 0; k + 1 < r.size(); ++k )
+		if( ( v[ k ] - level ) * ( v[ k + 1 ] - level ) <= 0.0 && v[ k ] != v[ k + 1 ] )
+			return r[ k ] + ( r[ k + 1 ] - r[ k ] ) * ( v[ k ] - level ) / ( v[ k ] - v[ k + 1 ] );
+	return -1.0;
+}
+} // namespace
+
+//===========================================================================
+// --balance
+//===========================================================================
+int RunBalance( const Perturb& perturb )
+{
+	Say( "\n=== balance: the diamagnetic bubble -- guide field only, no curvature, ideal\n" );
+	for( int cells : { 256, 512 } )
+	{
+		Rig rig;
+		rig.Init( 256, 256 );
+		rig.Quiet();
+		rig.Set( PT_DETAIL, DetailParam( cells ) );
+		rig.Set( PT_SPEED, 0.0f );
+		rig.Set( PT_BOUNDARY, 0.0f );//Open: the fast waves the ringing sends out leave
+		rig.Set( PT_POLES, PolesParam( 0 ) );
+		rig.Set( PT_FIELD, FieldParam( 1.0 ) );
+		rig.Set( PT_GUIDE_FIELD, GuideParam( 1.0 ) );
+		rig.Set( PT_PROFILE, 1.0f );
+		rig.Set( PT_BALL_SIZE, BallSizeParam( 0.15 ) );
+		rig.Set( PT_TEMPERATURE, TemperatureParam( 1.2 ) );
+		rig.Render( 1 );
+		const Snapshot s0 = Snapshot::Take( rig.plugin );
+		const Grid& g     = rig.plugin.CurrentGrid();
+		const double cx = 0.5 * g.lx, cy = 0.5 * g.ly;
+		//The flux the ball starts with: in 2.5-D Bz / rho is carried with
+		//the fluid and rho chi is conserved, so the integral of Bz chi (the
+		//ball's own flux) is an invariant.
+		double flux0 = 0.0;
+		for( int j = 0; j < s0.ny; ++j )
+			for( int i = 0; i < s0.nx; ++i )
+				flux0 += s0.Bz( i, j ) * s0.Tracer( i, j, 3 ) * s0.dx * s0.dx;
+		const int steps = rig.plugin.StepForTest( 8.0 );
+		const Snapshot s = Snapshot::Take( rig.plugin );
+		//The edge: where the ball marker crosses a half, from its area.
+		double area = 0.0;
+		for( int j = 0; j < s.ny; ++j )
+			for( int i = 0; i < s.nx; ++i )
+				if( s.Tracer( i, j, 3 ) > 0.5 )
+					area += s.dx * s.dx;
+		const double edge = std::sqrt( area / kPi );
+		const Profile pr  = Radial( s, cx, cy, 0.48 );
+		const double pIn  = MeanOver( pr.r, pr.p, 0.0, 0.5 * edge );
+		const double bIn  = MeanOver( pr.r, pr.bz, 0.0, 0.5 * edge );
+		const double pOut = MeanOver( pr.r, pr.p, 1.5 * edge, 2.0 * edge );
+		const double bOut = MeanOver( pr.r, pr.bz, 1.5 * edge, 2.0 * edge );
+		const double totalIn = pIn + 0.5 * bIn * bIn, totalOut = pOut + 0.5 * bOut * bOut;
+		//What ringing is left: the momentum equation balances any total-
+		//pressure difference against rho dv/dt ~ rho v^2 / L, so the largest
+		//rho v^2 anywhere bounds it. That plus half a percent for the edge's
+		//own numerical width is the tolerance, relative to the total.
+		double dyn = 0.0;
+		for( double v : pr.rhoV2 )
+			dyn = std::max( dyn, v );
+		const double tol = dyn / totalOut + 0.005;
+		Check( std::abs( totalIn / totalOut - 1.0 ) < tol,
+		       fmt( "Detail %d, t = 8 (%d substeps): p + B^2/2 inside %.5f, outside %.5f (%.3f%%; bound %.3f%%)", cells,
+		            steps, totalIn, totalOut, 100 * std::abs( totalIn / totalOut - 1.0 ), 100 * tol ) );
+		const double predicted = perturb.balanceNoTwo ? std::sqrt( std::max( bOut * bOut + 2.0 * pOut - pIn, 0.0 ) )
+		                                              : std::sqrt( std::max( bOut * bOut + 2.0 * pOut - 2.0 * pIn, 0.0 ) );
+		Check( std::abs( bIn / predicted - 1.0 ) < tol,
+		       fmt( "Detail %d: Bz inside %.5f against sqrt( B0^2 + 2 p_out - 2 p_in ) = %.5f%s (%.3f%%; bound %.3f%%)",
+		            cells, bIn, predicted, perturb.balanceNoTwo ? " (without the 2)" : "",
+		            100 * std::abs( bIn / predicted - 1.0 ), 100 * tol ) );
+		//The edge: the ball's flux over the field inside it is its area.
+		const double rPredicted = std::sqrt( flux0 / std::max( bIn, 1e-9 ) / kPi );
+		const double beta1      = Crossing( pr.r, pr.beta, 1.0 );
+		Check( std::abs( edge - rPredicted ) < 3.0 * s.dx,
+		       fmt( "Detail %d: the edge at r = %.4f, flux conservation puts it at %.4f (%.1f cells; bound 3)", cells,
+		            edge, rPredicted, std::abs( edge - rPredicted ) / s.dx ) );
+		//The beta = 1 contour lies in the edge layer: between where the ball
+		//marker has fallen to 0.9 and to 0.1 (plus a cell each side), with
+		//beta above 1 in the core and below 1 outside. (It is not at the
+		//marker's half: with beta_in ~ 1.4, 2p = B^2 where p has fallen only
+		//a tenth of the way across the numerically widened edge.)
+		const double inner = Crossing( pr.r, pr.chi, 0.9 ), outer = Crossing( pr.r, pr.chi, 0.1 );
+		const double betaIn = 2.0 * pIn / ( bIn * bIn ), betaOut = 2.0 * pOut / ( bOut * bOut );
+		Check( beta1 > inner - s.dx && beta1 < outer + s.dx && betaIn > 1.0 && betaOut < 1.0,
+		       fmt( "Detail %d: beta = 1 at r = %.4f, inside the edge layer %.4f..%.4f; beta %.2f inside, %.3f outside",
+		            cells, beta1, inner, outer, betaIn, betaOut ) );
+	}
+	return g_failures;
+}
+
+//===========================================================================
+// --rt
+//===========================================================================
+int RunRT( const Perturb& perturb )
+{
+	Say( "\n=== rt: magnetic Rayleigh-Taylor, a planar slab, one seeded mode\n" );
+	const double g = 1.0, rhoH = 2.0, rhoL = 1.0, A = ( rhoH - rhoL ) / ( rhoH + rhoL ), p0 = 20.0;
+	const double k = 2.0 * kPi * 2.0;//two wavelengths across the unit box
+	const double hydro = g * k * A;
+	struct Case
+	{
+		const char* name;
+		double bx, bz;
+		int cells;
+	};
+	const double bHalf = std::sqrt( hydro * ( rhoH + rhoL ) / ( 4.0 * k * k ) ); //gamma^2 = gkA / 2
+	const double bStop = std::sqrt( hydro * ( rhoH + rhoL ) / ( k * k ) );       //gamma^2 = -gkA
+	const Case cases[] = { { "B perpendicular to k (guide field)", 0.0, 1.0, 256 },
+		                   { "B perpendicular to k (guide field)", 0.0, 1.0, 512 },
+		                   { "B along the interface, k < k_c", bHalf, 0.0, 256 },
+		                   { "B along the interface, k < k_c", bHalf, 0.0, 512 },
+		                   { "B along the interface, k > k_c", bStop, 0.0, 256 } };
+	for( const Case& c : cases )
+	{
+		TestModel model;
+		model.boundary       = 4;
+		model.gravityCentre  = true;
+		model.gravityX       = 0.5;
+		model.gravityY       = -1.0e4;//g along +y, uniform to 1e-9 over the box
+		model.gravityCore    = 0.0;
+		model.uniformGravity = true;
+		//Two slabs, identical but for the seed. The discrete hydrostatic
+		//balance is not exact across the interface, so an unseeded slab
+		//makes small flows of its own at every wavelength; in the linear
+		//regime the seeded slab is those plus the mode, so the mode is the
+		//DIFFERENCE of the two -- the spurious flows cancel exactly.
+		Rig rigs[ 2 ];
+		const double delta = 1e-3;
+		Grid gr;
+		for( int r = 0; r < 2; ++r )
+		{
+			Rig& rig = rigs[ r ];
+			rig.plugin.SetModelForTest( model );
+			rig.Init( 128, 128 );
+			rig.Quiet();
+			rig.Set( PT_DETAIL, DetailParam( c.cells ) );
+			rig.Set( PT_SPEED, 0.0f );
+			rig.Set( PT_POLES, PolesParam( 0 ) );
+			rig.Set( PT_GUIDE_FIELD, 0.0f );
+			rig.Set( PT_CURVATURE, CurvatureParam( g ) );
+			rig.Render( 1 );
+			gr = rig.plugin.CurrentGrid();
+			StateBuilder sb( gr.nx, gr.ny, kGamma );
+			const double w = gr.dx;//the interface: a tanh one cell wide
+			for( int j = 0; j < gr.ny; ++j )
+				for( int i = 0; i < gr.nx; ++i )
+				{
+					const double x = ( i + 0.5 ) * gr.dx, y = ( j + 0.5 ) * gr.dx - 0.5;
+					//Heavy below (g points up, +y), in hydrostatic balance:
+					//dp/dy = rho g, integrated in closed form.
+					const double rho = 0.5 * ( rhoH + rhoL ) + 0.5 * ( rhoH - rhoL ) * std::tanh( -y / w );
+					const double p   = p0 + g * ( 0.5 * ( rhoH + rhoL ) * y
+					                            - 0.5 * ( rhoH - rhoL ) * w * std::log( std::cosh( y / w ) ) );
+					//The incompressible eigenfunction, divergence-free.
+					const double e = r == 0 ? std::exp( -k * std::abs( y ) ) : 0.0;
+					const double v = delta * std::cos( k * x ) * e;
+					const double u = delta * ( y >= 0.0 ? 1.0 : -1.0 ) * std::sin( k * x ) * e;
+					sb.Set( i, j, rho, u, v, 0.0, p, c.bx, 0.0, c.bz );
+				}
+			sb.Load( rig.plugin );
+		}
+		auto amplitude = [ & ]() {
+			const Snapshot s = Snapshot::Take( rigs[ 0 ].plugin );
+			const Snapshot z = Snapshot::Take( rigs[ 1 ].plugin );
+			double re = 0.0, im = 0.0;
+			for( int j = 0; j < s.ny; ++j )
+			{
+				const double y = ( j + 0.5 ) * s.dx - 0.5;
+				if( std::abs( y ) > 0.15 )
+					continue;
+				for( int i = 0; i < s.nx; ++i )
+				{
+					const double x = ( i + 0.5 ) * s.dx;
+					const double v = s.V( i, j ) - z.V( i, j );
+					re += v * std::cos( k * x );
+					im += v * std::sin( k * x );
+				}
+			}
+			return std::sqrt( re * re + im * im );
+		};
+		std::vector< double > t, a;
+		const double a0 = amplitude();
+		double peak     = a0;
+		//Run for three e-folds of the theory's rate (or 2 tau_A if stable),
+		//sampled 25 times.
+		const double gRate = std::sqrt( std::max( perturb.curvatureSign * g * k * A - 2.0 * k * k * c.bx * c.bx / ( rhoH + rhoL ), 0.0 ) );
+		const double span  = gRate > 0.0 ? 3.0 / gRate : 2.0;
+		for( int q = 1; q <= 25; ++q )
+		{
+			rigs[ 0 ].plugin.StepForTest( span / 25.0 );
+			rigs[ 1 ].plugin.StepForTest( span / 25.0 );
+			t.push_back( span * q / 25.0 );
+			a.push_back( amplitude() );
+			peak = std::max( peak, a.back() );
+		}
+		//Theory, with the model's sign of g (the negative control flips it).
+		const double gs = perturb.curvatureSign * g;
+		const double gamma2 = gs * k * A - 2.0 * k * k * c.bx * c.bx / ( rhoH + rhoL );
+		if( gamma2 > 0.0 )
+		{
+			//The seed is velocity with no displacement: equal parts of the
+			//growing and the decaying mode, so v = v0 cosh( gamma t ), not
+			//v0 e^( gamma t ). (Fitting the slope of ln v -- the first
+			//version -- read gamma tanh( gamma t ): 6% low at two e-folds.)
+			//gamma from each sample in the last two e-folds, acosh( v / v0 ) / t,
+			//and the median of them.
+			std::vector< double > rates;
+			for( size_t q = 0; q < t.size(); ++q )
+				if( t[ q ] >= span / 3.0 - 1e-9 && a[ q ] > a0 )
+					rates.push_back( std::acosh( a[ q ] / a0 ) / t[ q ] );
+			std::sort( rates.begin(), rates.end() );
+			const double rate = rates.empty() ? 0.0 : rates[ rates.size() / 2 ];
+			const double theory = std::sqrt( gamma2 );
+			//The bound: a diffuse interface of thickness L weakens the
+			//buoyancy term to gkA / ( 1 + kL ), and the scheme holds this
+			//interface about two cells thick. The tension term does not
+			//depend on L, so the relative error in the rate is
+			//( kL / 2 ) gkA / gamma^2: twice as large where tension has
+			//taken half of gkA. Plus compressibility, g / ( k c_s^2 ), and 2%
+			//for the fit.
+			const double cs2 = kGamma * p0 / rhoL;
+			const double tol = 0.5 * k * 2.0 * gr.dx * hydro / gamma2 + g / ( k * cs2 ) + 0.02;
+			Check( std::abs( rate / theory - 1.0 ) < tol,
+			       fmt( "%s, Detail %d: growth %.4f against sqrt( gkA - 2 (k.B)^2 / (rho1 + rho2) ) = %.4f (%.2f%%; bound %.2f%%)",
+			            c.name, c.cells, rate, theory, 100 * std::abs( rate / theory - 1.0 ), 100 * tol ) );
+		}
+		else
+		{
+			//Stable: it oscillates at sqrt( -gamma^2 ) and must not grow. The
+			//unstable cases grow by e^3 over the same time.
+			Check( peak < 2.0 * a0, fmt( "%s, Detail %d: gamma^2 = %.3f < 0 predicted; amplitude peaked at %.2f of its start "
+			                             "(bound 2; the unstable cases reach > 20)",
+			                             c.name, c.cells, gamma2, peak / a0 ) );
+		}
+	}
+	return g_failures;
+}
+
+//===========================================================================
+// --cusp
+//===========================================================================
+namespace
+{
+/// The cusp angles on a circle, from the coils alone: where the vacuum field
+/// is radial (B_phi = 0), which is where its field lines lead out. Computed
+/// here in double from the line currents, not from the plugin's shader.
+std::vector< double > CuspAngles( const Coils& coils, double cx, double cy, double radius )
+{
+	std::vector< double > out;
+	const int n = 7200;
+	auto bphi = [ & ]( double a ) {
+		double bx, by, bz;
+		VacuumField( coils, cx + radius * std::cos( a ), cy + radius * std::sin( a ), bx, by, bz );
+		return -bx * std::sin( a ) + by * std::cos( a );
+	};
+	for( int i = 0; i < n; ++i )
+	{
+		const double a0 = 2.0 * kPi * i / n, a1 = 2.0 * kPi * ( i + 1 ) / n;
+		const double f0 = bphi( a0 ), f1 = bphi( a1 );
+		if( f0 * f1 < 0.0 )
+		{
+			//Keep the zeros where the field points OUT or IN along the radius
+			//and is strong -- the cusps; B_phi also vanishes, weakly, nowhere
+			//else on a pure multipole, but check |B_r| anyway.
+			const double a = a0 + ( a1 - a0 ) * f0 / ( f0 - f1 );
+			double bx, by, bz;
+			VacuumField( coils, cx + radius * std::cos( a ), cy + radius * std::sin( a ), bx, by, bz );
+			if( std::hypot( bx, by ) > 1e-6 )
+				out.push_back( a );
+		}
+	}
+	return out;
+}
+
+double AngleDiff( double a, double b )
+{
+	double d = std::fmod( a - b, 2.0 * kPi );
+	if( d > kPi )
+		d -= 2.0 * kPi;
+	if( d < -kPi )
+		d += 2.0 * kPi;
+	return d;
+}
+} // namespace
+
+int RunCusp( const Perturb& perturb )
+{
+	Say( "\n=== cusp: a hot ball in an N-pole cusp leaks where the vacuum field says\n" );
+	const double rc = 0.33;
+	struct Case
+	{
+		int poles;
+		double spin;
+	};
+	const Case cases[] = { { 4, 0.0 }, { 6, 0.0 }, { 8, 0.0 }, { 6, 0.5 } };
+	for( const Case& c : cases )
+	{
+		Rig rig;
+		rig.Init( 256, 256 );
+		rig.Quiet();
+		rig.Set( PT_DETAIL, DetailParam( 256 ) );
+		//Open, so what leaks leaves; with the coils turning, Wall, where the
+		//coils' turn is carried through the whole field at once. (With Open
+		//it arrives only through the edge and the interior lags it.)
+		rig.Set( PT_BOUNDARY, c.spin > 0.0 ? 1.0f : 0.0f );
+		rig.Set( PT_POLES, PolesParam( c.poles ) );
+		rig.Set( PT_FIELD, FieldParam( 1.0 ) );
+		rig.Set( PT_GUIDE_FIELD, 0.0f );
+		rig.Set( PT_BALL_SIZE, BallSizeParam( 0.12 ) );
+		rig.Set( PT_TEMPERATURE, TemperatureParam( 2.0 ) );
+		rig.Set( PT_COIL_SPIN, static_cast< float >( 0.5 + 0.5 * c.spin ) );
+		rig.Set( PT_SPEED, ParamFromSpeed( 0.6f ) );//0.01 tau_A a frame
+		const Grid& g = rig.plugin.CurrentGrid();
+		rig.Render( 1 );
+		const double cx = 0.5 * g.lx, cy = 0.5 * g.ly;
+		//Outward flux of ball material through the circle, accumulated.
+		const int bins = 72;
+		std::vector< double > hist( bins, 0.0 );
+		const int frames = 60;
+		const Coils start = rig.plugin.CurrentCoils();
+		auto coilAngle = [ & ]( const Coils& k ) { return std::atan2( k.y[ 0 ] - cy, k.x[ 0 ] - cx ); };
+		double weighted = 0.0, weight = 0.0;
+		for( int f = 0; f < frames; ++f )
+		{
+			rig.Render( 1 );
+			const Snapshot s = Snapshot::Take( rig.plugin );
+			double frameFlux = 0.0;
+			for( int q = 0; q < 720; ++q )
+			{
+				const double a = 2.0 * kPi * ( q + 0.5 ) / 720.0;
+				const double x = cx + rc * std::cos( a ), y = cy + rc * std::sin( a );
+				const int i = static_cast< int >( x / s.dx ), j = static_cast< int >( y / s.dx );
+				const double ur = s.U( i, j ) * std::cos( a ) + s.V( i, j ) * std::sin( a );
+				const double carried = s.d[ s.At( i, j ) + 3 ];//rho chi
+				if( ur > 0.0 )
+				{
+					hist[ static_cast< int >( a / ( 2.0 * kPi ) * bins ) % bins ] += carried * ur;
+					frameFlux += carried * ur;
+				}
+			}
+			//The coils' angle, weighted by what leaked while they stood there:
+			//a smeared histogram's centre is where they were on average.
+			weighted += frameFlux * AngleDiff( coilAngle( rig.plugin.CurrentCoils() ), coilAngle( start ) );
+			weight += frameFlux;
+		}
+		const double turned = weight > 0.0 ? weighted / weight : 0.0;
+		//Peaks: local maxima of the 3-bin smoothed histogram, largest N,
+		//refined by a parabola through the three bins.
+		std::vector< double > sm( bins );
+		for( int b = 0; b < bins; ++b )
+			sm[ b ] = hist[ ( b + bins - 1 ) % bins ] + hist[ b ] + hist[ ( b + 1 ) % bins ];
+		std::vector< std::pair< double, double > > peaks;
+		for( int b = 0; b < bins; ++b )
+		{
+			const double l = sm[ ( b + bins - 1 ) % bins ], m = sm[ b ], r = sm[ ( b + 1 ) % bins ];
+			if( m > l && m >= r )
+			{
+				const double off = ( l - r ) / ( 2.0 * ( l - 2.0 * m + r ) );
+				peaks.push_back( { m, 2.0 * kPi * ( b + 0.5 + off ) / bins } );
+			}
+		}
+		std::sort( peaks.begin(), peaks.end(), []( auto& a, auto& b ) { return a.first > b.first; } );
+		std::vector< double > predicted = CuspAngles( start, cx, cy, rc );
+		for( double& a : predicted )
+			a += turned;
+		if( perturb.cuspAtCoils )
+			for( double& a : predicted )
+				a += kPi / c.poles;
+		double worst = 0.0;
+		bool enough  = static_cast< int >( peaks.size() ) >= c.poles && static_cast< int >( predicted.size() ) == c.poles;
+		if( enough )
+			for( double a : predicted )
+			{
+				double best = 1e9;
+				for( int q = 0; q < c.poles; ++q )
+					best = std::min( best, std::abs( AngleDiff( peaks[ q ].second, a ) ) );
+				worst = std::max( worst, best );
+			}
+		//Half a bin, plus the angle two cells subtend at the circle.
+		const double tol = kPi / bins + 2.0 * g.dx / rc;
+		//And the N peaks must be leaks, not ripple: the weakest of them at
+		//least half again the strongest bin halfway between two cusps. (An
+		//eight-pole cusp's gaps are narrow and its contrast is 2.6.)
+		double between = 0.0;
+		for( double a : predicted )
+		{
+			const int b = static_cast< int >( std::fmod( a + kPi / c.poles + 2.0 * kPi, 2.0 * kPi ) / ( 2.0 * kPi ) * bins ) % bins;
+			between     = std::max( between, sm[ b ] );
+		}
+		const double weakest = enough ? peaks[ c.poles - 1 ].first : 0.0;
+		if( c.spin > 0.0 && enough )
+		{
+			//Following, not merely sitting: the coils as they STARTED must
+			//miss the leaks by more than the bound.
+			double stale = 0.0;
+			for( double a : CuspAngles( start, cx, cy, rc ) )
+			{
+				double best = 1e9;
+				for( int q = 0; q < c.poles; ++q )
+					best = std::min( best, std::abs( AngleDiff( peaks[ q ].second, a ) ) );
+				stale = std::max( stale, best );
+			}
+			Check( stale > kPi / bins + 2.0 * g.dx / rc,
+			       fmt( "N = 6 turning: the unturned coils' cusps miss the leaks by %.2f deg (must exceed the bound)",
+			            stale * 180.0 / kPi ) );
+		}
+		if( std::getenv( "CT_HIST" ) )
+			for( int b = 0; b < bins; ++b )
+				Say( "    %5.1f deg %10.4g\n", ( b + 0.5 ) * 360.0 / bins, sm[ b ] );
+		Check( enough && worst < tol && weakest > 1.5 * between,
+		       fmt( "N = %d%s: %zu cusp angles predicted, the %d strongest leaks within %.2f deg of them (bound %.2f); "
+		            "weakest leak %.1fx the flow between cusps (bound 1.5)",
+		            c.poles, c.spin > 0.0 ? fmt( ", Wall, coils turning %.1f rad/tau_A (turned %.1f deg, leak-weighted)",
+		                                         c.spin, turned * 180.0 / kPi ).c_str() : "",
+		            predicted.size(), c.poles, worst * 180.0 / kPi, tol * 180.0 / kPi, weakest / std::max( between, 1e-30 ) ) );
+	}
+	return g_failures;
+}
+
+//===========================================================================
+// --frozen
+//===========================================================================
+int RunFrozen( const Perturb& perturb )
+{
+	Say( "\n=== frozen: Bz / rho is carried with the fluid (2.5-D, no in-plane field)\n" );
+	Rig rig;
+	rig.Init( 256, 256 );
+	rig.Quiet();
+	rig.Set( PT_DETAIL, DetailParam( 256 ) );
+	rig.Set( PT_SPEED, 0.0f );
+	rig.Set( PT_BOUNDARY, 1.0f );
+	rig.Set( PT_POLES, PolesParam( 0 ) );
+	rig.Set( PT_GUIDE_FIELD, GuideParam( 1.0 ) );
+	rig.Set( PT_BALL_SIZE, 1.0f );//the drive's window follows the ball's size
+	rig.Set( PT_DRIVE, 0.7f );
+	rig.Set( PT_DRIVE_SCALE, 0.6f );
+	rig.Render( 1 );
+	const Grid& g = rig.plugin.CurrentGrid();
+	StateBuilder sb( g.nx, g.ny, kGamma );
+	auto pattern = [ & ]( double x, double y ) { return 1.0 + 0.5 * std::sin( 2.0 * kPi * x ) * std::sin( 2.0 * kPi * y ); };
+	for( int j = 0; j < g.ny; ++j )
+		for( int i = 0; i < g.nx; ++i )
+		{
+			const double x = ( i + 0.5 ) * g.dx, y = ( j + 0.5 ) * g.dx;
+			const double rho = 1.0 + 0.3 * std::cos( 2.0 * kPi * x ) * std::cos( 4.0 * kPi * y );
+			const double q   = pattern( x, y );
+			const double bz  = rho * q;
+			//Total pressure uniform, so nothing moves but what the drive moves.
+			sb.Set( i, j, rho, 0, 0, 0, 3.0 - 0.5 * bz * bz, 0, 0, bz, q, 0, 0, 0 );
+		}
+	sb.Load( rig.plugin );
+	rig.plugin.StepForTest( 1.5 );
+	const Snapshot s = Snapshot::Take( rig.plugin );
+	double sa = 0, sb2 = 0, saa = 0, sbb = 0, sab = 0, n = 0, moved = 0, spread = 0;
+	for( int j = 0; j < s.ny; ++j )
+		for( int i = 0; i < s.nx; ++i )
+		{
+			const double x = ( i + 0.5 ) * s.dx, y = ( j + 0.5 ) * s.dx;
+			const double carried = s.Bz( i, j ) / s.Rho( i, j );
+			const double tracer  = perturb.frozenStatic ? pattern( x, y ) : s.Tracer( i, j, 0 );
+			sa += carried;
+			sb2 += tracer;
+			saa += carried * carried;
+			sbb += tracer * tracer;
+			sab += carried * tracer;
+			n += 1.0;
+			moved += std::pow( carried - pattern( x, y ), 2 );
+			spread += std::pow( pattern( x, y ) - 1.0, 2 );
+		}
+	const double cov  = sab / n - ( sa / n ) * ( sb2 / n );
+	const double corr = cov / std::sqrt( ( saa / n - sa * sa / n / n ) * ( sbb / n - sb2 * sb2 / n / n ) );
+	const double displaced = std::sqrt( moved / spread );
+	Check( displaced > 0.3, fmt( "the drive moved the pattern: Bz/rho differs from where it started by %.2f of its own "
+	                             "spread (at least 0.3, or the check proves nothing)",
+	                             displaced ) );
+	//Two advections of the same mass flux -- Bz by the induction equation
+	//through HLLD, the tracer upwinded -- that differ only in their
+	//numerical diffusion at the pattern's scale (32 cells a wavelength).
+	Check( corr > 0.99, fmt( "Bz/rho against the tracer carried with the mass%s: correlation %.5f (bound 0.99)",
+	                         perturb.frozenStatic ? " (expected: the pattern where it STARTED)" : "", corr ) );
+	return g_failures;
+}
+
+//===========================================================================
+// --quench
+//===========================================================================
+namespace
+{
+/// Toro's exact Riemann solver for the Euler equations: the right-moving
+/// shock's speed when a slab of (rhoL, pL) at rest meets (rhoR, pR) at rest.
+double ExactShockSpeed( double rhoL, double pL, double rhoR, double pR, double gamma )
+{
+	const double cL = std::sqrt( gamma * pL / rhoL ), cR = std::sqrt( gamma * pR / rhoR );
+	auto f = [ & ]( double p, double rho, double pk, double c, double& d ) {
+		if( p > pk )
+		{
+			const double A = 2.0 / ( ( gamma + 1.0 ) * rho ), B = ( gamma - 1.0 ) / ( gamma + 1.0 ) * pk;
+			const double q = std::sqrt( A / ( p + B ) );
+			d              = q * ( 1.0 - ( p - pk ) / ( 2.0 * ( B + p ) ) );
+			return ( p - pk ) * q;
+		}
+		const double r = p / pk;
+		d = 1.0 / ( rho * c ) * std::pow( r, -( gamma + 1.0 ) / ( 2.0 * gamma ) );
+		return 2.0 * c / ( gamma - 1.0 ) * ( std::pow( r, ( gamma - 1.0 ) / ( 2.0 * gamma ) ) - 1.0 );
+	};
+	double p = 0.5 * ( pL + pR );
+	for( int it = 0; it < 200; ++it )
+	{
+		double dL, dR;
+		const double F = f( p, rhoL, pL, cL, dL ) + f( p, rhoR, pR, cR, dR );
+		const double next = std::max( p - F / ( dL + dR ), 1e-12 );
+		if( std::abs( next - p ) < 1e-14 * p )
+			break;
+		p = next;
+	}
+	return cR * std::sqrt( ( gamma + 1.0 ) / ( 2.0 * gamma ) * p / pR + ( gamma - 1.0 ) / ( 2.0 * gamma ) );
+}
+} // namespace
+
+int RunQuench( const Perturb& perturb )
+{
+	Say( "\n=== quench: the coils let go; the plasma free-expands\n" );
+	//1. The expansion, in the plane: a slab of hot plasma with no field
+	//left, into the tenuous gas around it. Its front can never outrun the
+	//vacuum escape speed 2 c_s / ( gamma - 1 ); into a gas of density
+	//rho_b it is a shock whose speed the exact Riemann solution gives, and
+	//it approaches the escape speed as rho_b falls towards the floor.
+	const double gamma = perturb.quenchGamma > 0.0 ? perturb.quenchGamma : kGamma;
+	for( double rhoB : { 1e-2, 1e-3 } )
+	{
+		const double pB = 1e-5;
+		TestModel model;
+		model.boundary           = 3;
+		model.backgroundDensity  = static_cast< float >( rhoB );
+		model.backgroundPressure = static_cast< float >( pB );
+		Rig rig;
+		rig.plugin.SetModelForTest( model );
+		rig.Init( 128, 128 );
+		rig.Quiet();
+		rig.Set( PT_DETAIL, DetailParam( 512 ) );
+		rig.Set( PT_SPEED, 0.0f );
+		rig.Set( PT_POLES, PolesParam( 0 ) );
+		rig.Set( PT_GUIDE_FIELD, 0.0f );
+		rig.Render( 1 );
+		const Grid& g = rig.plugin.CurrentGrid();
+		StateBuilder sb( g.nx, g.ny, kGamma );
+		for( int j = 0; j < g.ny; ++j )
+			for( int i = 0; i < g.nx; ++i )
+			{
+				const bool hot = ( i + 0.5 ) * g.dx < 0.25;
+				sb.Set( i, j, hot ? 1.0 : rhoB, 0, 0, 0, hot ? 1.0 : pB, 0, 0, 0 );
+			}
+		sb.Load( rig.plugin );
+		auto front = [ & ]() {
+			const Snapshot s = Snapshot::Take( rig.plugin );
+			const int j      = s.ny / 2;
+			for( int i = s.nx - 1; i >= 0; --i )
+				if( s.Rho( i, j ) > 2.5 * rhoB )
+					return ( i + 0.5 ) * s.dx;
+			return 0.0;
+		};
+		//From 0.08, once the shock has formed and its structure is steady, to
+		//0.18.
+		rig.plugin.StepForTest( 0.08 );
+		const double x1 = front();
+		rig.plugin.StepForTest( 0.1 );
+		const double x2    = front();
+		const double speed = ( x2 - x1 ) / 0.1;
+		const double escape = 2.0 * std::sqrt( gamma * 1.0 / 1.0 ) / ( gamma - 1.0 );
+		const double shock  = ExactShockSpeed( 1.0, 1.0, rhoB, pB, gamma );
+		//The front is found to within a cell at each end: 2 dx over 0.1.
+		const double tol = 2.0 * g.dx / 0.1;
+		Check( speed <= escape + tol && std::abs( speed - shock ) < tol,
+		       fmt( "into rho_b = %.0e: front at %.4f %s escape speed %.4f; exact Riemann shock %.4f (%.2f%% of escape; "
+		            "measured error %.4f, bound 2 dx / dt = %.4f)",
+		            rhoB, speed, speed <= escape + tol ? "<=" : "EXCEEDS", escape, shock, 100 * shock / escape,
+		            std::abs( speed - shock ), tol ) );
+	}
+
+	//2. The quench itself: the default bottle, then Quench. The coils'
+	//strength decays as exp( -t / kQuenchTime ) and the ball, let go, grows.
+	{
+		Rig rig;
+		rig.Init( 320, 180 );
+		rig.Set( PT_DRIVE, 0.0f );
+		rig.Set( PT_CURVATURE, 0.0f );
+		rig.Render( 120 );
+		auto ballArea = [ & ]() {
+			const Snapshot s = Snapshot::Take( rig.plugin );
+			double a         = 0.0;
+			for( int j = 0; j < s.ny; ++j )
+				for( int i = 0; i < s.nx; ++i )
+					if( s.Tracer( i, j, 3 ) > 0.5 )
+						a += s.dx * s.dx;
+			return a;
+		};
+		const double area0  = ballArea();
+		const double guide0 = rig.plugin.CurrentCoils().guide;
+		const double t0     = rig.plugin.SimTime();
+		rig.Set( PT_QUENCH, 1.0f );
+		rig.Render( 120 );
+		const double t1       = rig.plugin.SimTime();
+		const double expected = guide0 * std::exp( -( t1 - t0 ) / kQuenchTime );
+		const double guide1   = rig.plugin.CurrentCoils().guide;
+		const double area1    = ballArea();
+		Check( std::abs( guide1 - expected ) < 1e-6 * guide0 + 1e-9,
+		       fmt( "the guide field decays as exp( -t / %.2f ): %.6f after %.3f tau_A, expected %.6f", kQuenchTime,
+		            guide1, t1 - t0, expected ) );
+		Check( area1 > 1.5 * area0, fmt( "the ball let go: its area %.4f -> %.4f (x%.2f; at least x1.5)", area0, area1,
+		                                 area1 / area0 ) );
+	}
+	return g_failures;
+}
+
+//===========================================================================
+// --resist
+//===========================================================================
+int RunResist( const Perturb& perturb )
+{
+	Say( "\n=== resist: with eta > 0 the field diffuses into a static plasma on L^2 / eta\n" );
+	const double eta = 1e-3, width = 0.08, bump = 0.05;
+	Rig rig;
+	rig.Init( 256, 256 );
+	rig.Quiet();
+	rig.Set( PT_DETAIL, DetailParam( 256 ) );
+	rig.Set( PT_SPEED, 0.0f );
+	rig.Set( PT_BOUNDARY, 0.0f );
+	rig.Set( PT_POLES, PolesParam( 0 ) );
+	rig.Set( PT_FIELD, FieldParam( 1.0 ) );
+	rig.Set( PT_GUIDE_FIELD, GuideParam( 1.0 ) );
+	rig.Set( PT_RESISTIVITY, ResistivityParam( eta ) );
+	rig.Render( 1 );
+	const Grid& g = rig.plugin.CurrentGrid();
+	StateBuilder sb( g.nx, g.ny, kGamma );
+	for( int j = 0; j < g.ny; ++j )
+		for( int i = 0; i < g.nx; ++i )
+		{
+			const double x = ( i + 0.5 ) * g.dx - 0.5, y = ( j + 0.5 ) * g.dx - 0.5;
+			const double bz = 1.0 + bump * std::exp( -( x * x + y * y ) / ( width * width ) );
+			//Total pressure uniform: a static plasma. As B diffuses the
+			//pressure hole that balanced it stays put, and the gas has to
+			//squeeze by dp / ( gamma p ) to keep the total level -- which
+			//compresses the frozen Bz by the same fraction. At p = 10 that
+			//was 3% of the bump (the first version). At p = 1000 it is 1e-5;
+			//rho = 100 keeps the sound speed, and the step, what it was.
+			sb.Set( i, j, 100.0, 0, 0, 0, 1000.0 - 0.5 * bz * bz, 0, 0, bz );
+		}
+	sb.Load( rig.plugin );
+	//The time for 4 eta t to equal w^2: the bump halves.
+	const double t = width * width / ( 4.0 * eta );
+	rig.plugin.StepForTest( t );
+	const Snapshot s = Snapshot::Take( rig.plugin );
+	const double peak     = s.Bz( g.nx / 2, g.ny / 2 ) - 1.0;//the cell nearest the centre
+	const double off      = 0.5 * g.dx;
+	const double w2       = width * width + 4.0 * perturb.resistFactor * eta * t;
+	const double expected = bump * width * width / w2 * std::exp( -2.0 * off * off / w2 );
+	//The five-point Laplacian's truncation on a Gaussian w/dx = 20 cells
+	//wide is ( dx / w )^2 / 12 of it; the flows second order in the bump are
+	//(bump)^2. 1% covers both with room.
+	Check( std::abs( peak / expected - 1.0 ) < 0.01,
+	       fmt( "after w^2 / ( 4 eta ) = %.2f tau_A: the bump's peak %.6f against the diffusion equation's %.6f%s (%.3f%%; bound 1%%)",
+	            t, peak, expected, perturb.resistFactor != 1.0 ? " (with eta doubled)" : "",
+	            100 * std::abs( peak / expected - 1.0 ) ) );
+	return g_failures;
+}
+
+//===========================================================================
+// --floors
+//===========================================================================
+int RunFloors( const Perturb& perturb )
+{
+	Say( "\n=== floors: how often they fire on the default look, and what happens without them\n" );
+	{
+		TestModel model;
+		model.floors = !perturb.floorsOff;
+		Rig rig;
+		rig.plugin.SetModelForTest( model );
+		rig.Init( 320, 180 );
+		rig.Render( 600 );
+		const Grid& g        = rig.plugin.CurrentGrid();
+		const double cellSteps = static_cast< double >( g.nx ) * g.ny * rig.plugin.SubstepsTaken();
+		const double fired   = rig.plugin.FloorHits() / cellSteps;
+		const double entropy = rig.plugin.EntropyCells() / cellSteps;
+		const bool finite    = Snapshot::Take( rig.plugin ).Finite();
+		Check( finite && fired < 1e-4,
+		       fmt( "600 frames of the default look: floors fired on %.2e of cell-steps (bound 1e-4); %.1f%% took the "
+		            "dual-energy switch (the low-beta background)",
+		            fired, 100 * entropy ) );
+	}
+	//Where the floors are needed: Einfeldt's 1-2-3 problem, two halves of a
+	//plasma flying apart at Mach 30 each way. A gap opens once they separate
+	//faster than 4 c / ( gamma - 1 ) = 6 c, and at Mach 30 it is a deep
+	//vacuum; MUSCL-Hancock is not positivity-preserving there. (At Mach 3 and
+	//5 the scheme's own diffusion kept the gap above 1e-3 and nothing was
+	//needed: the negative control could not fail, so those were not tests.)
+	{
+		TestModel model;
+		model.floors   = !perturb.floorsOff;
+		model.boundary = 3;
+		Rig rig;
+		rig.plugin.SetModelForTest( model );
+		rig.Init( 128, 128 );
+		rig.Quiet();
+		rig.Set( PT_DETAIL, DetailParam( 256 ) );
+		rig.Set( PT_SPEED, 0.0f );
+		rig.Set( PT_POLES, PolesParam( 0 ) );
+		rig.Set( PT_GUIDE_FIELD, 0.0f );
+		rig.Render( 1 );
+		const Grid& g = rig.plugin.CurrentGrid();
+		StateBuilder sb( g.nx, g.ny, kGamma );
+		const double c = std::sqrt( kGamma * 0.4 );
+		for( int j = 0; j < g.ny; ++j )
+			for( int i = 0; i < g.nx; ++i )
+				sb.Set( i, j, 1.0, ( i + 0.5 ) * g.dx < 0.5 ? -30.0 * c : 30.0 * c, 0, 0, 0.4, 0, 0, 0 );
+		sb.Load( rig.plugin );
+		const int steps  = rig.plugin.StepForTest( 0.1 );
+		const Snapshot s = Snapshot::Take( rig.plugin );
+		bool sane        = steps > 0 && s.Finite();
+		double rmin = 1e30, pmin = 1e30;
+		for( int j = 0; j < s.ny && sane; ++j )
+			for( int i = 0; i < s.nx; ++i )
+			{
+				rmin = std::min( rmin, s.Rho( i, j ) );
+				pmin = std::min( pmin, s.P( i, j ) );
+			}
+		sane = sane && rmin > 0.0 && pmin > -1e-6;
+		Check( sane, fmt( "the 1-2-3 problem at Mach 30%s: %s (min rho %.2e, min p %.2e; floors fired %.0f times)",
+		                  perturb.floorsOff ? ", FLOORS OFF" : "", sane ? "finite and positive" : "BLEW UP", rmin, pmin,
+		                  rig.plugin.FloorHits() ) );
+	}
+	return g_failures;
+}
+
+//===========================================================================
+// --mutation
+//===========================================================================
+int RunMutation( const Perturb& )
+{
+	//One character, in the shipped limiter: the monotonised-central slope's
+	//centred difference, ( dl + dr ) / 2, becomes ( dl - dr ) / 2. Brio-Wu and
+	//the Alfven wave must now fail, which proves the harness drives the shader
+	//the plugin compiles and not a copy of it.
+	const std::string find = "0.5 * abs( l + r )", replace = "0.5 * abs( l - r )";
+	Say( "\n=== mutation: one character changed in the shipped shader -- \"%s\" -> \"%s\"\n", find.c_str(), replace.c_str() );
+	int present = 0;
+	for( const ProgramSource& source : AllSources() )
+		if( source.fragment.find( find ) != std::string::npos )
+			++present;
+	Check( present > 0, fmt( "the text to mutate is in %d of the shipped programs", present ) );
+	ContainmentPlugin::SetShaderMutationForTest( find, replace );
+	const int before = g_failures;
+	g_failures       = 0;
+	RunBrioWu( Perturb() );
+	const int briowu = g_failures;
+	g_failures       = 0;
+	RunAlfven( Perturb() );
+	const int alfven = g_failures;
+	g_failures       = before;
+	ContainmentPlugin::SetShaderMutationForTest( "", "" );
+	Check( briowu > 0 && alfven > 0, fmt( "against the mutated shader --briowu failed %d checks and --alfven %d (each must fail "
+	                                      "at least one)", briowu, alfven ) );
+	return g_failures;
+}
+
+
 
 //===========================================================================
 // --negative
@@ -897,6 +1717,13 @@ int RunNegative()
 	add( "divb", RunDivB, "run with GLM off", []( Perturb& p ) { p.glmOff = true; } );
 	add( "still", RunStill, "expect one ulp more in one pixel", []( Perturb& p ) { p.stillUlp = true; } );
 	add( "glow", RunGlow, "run the glare as an additive bloom", []( Perturb& p ) { p.additiveGlow = true; } );
+	add( "balance", RunBalance, "expect Bz inside = sqrt( B0^2 - p_in ), without the 2", []( Perturb& p ) { p.balanceNoTwo = true; } );
+	add( "rt", RunRT, "the wrong sign on Curvature", []( Perturb& p ) { p.curvatureSign = -1.0; } );
+	add( "cusp", RunCusp, "expect the leaks towards the coils", []( Perturb& p ) { p.cuspAtCoils = true; } );
+	add( "frozen", RunFrozen, "compare with where the pattern started", []( Perturb& p ) { p.frozenStatic = true; } );
+	add( "quench", RunQuench, "predict with gamma 7/5", []( Perturb& p ) { p.quenchGamma = 1.4; } );
+	add( "resist", RunResist, "expect eta twice as big", []( Perturb& p ) { p.resistFactor = 2.0; } );
+	add( "floors", RunFloors, "run with the floors off", []( Perturb& p ) { p.floorsOff = true; } );
 	if( const char* only = std::getenv( "CT_NEGATIVE" ) )
 		cases.erase( std::remove_if( cases.begin(), cases.end(), [ & ]( const Case& c ) { return std::string( c.name ) != only; } ),
 		             cases.end() );

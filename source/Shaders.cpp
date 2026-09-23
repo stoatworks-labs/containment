@@ -149,42 +149,48 @@ Q fetchPrim( sampler2D TA, sampler2D TB, sampler2D TC, sampler2D TD, ivec2 cell 
 	bool inside  = cell.x >= 0 && cell.y >= 0 && cell.x < n.x && cell.y < n.y;
 	ivec2 source = cell;
 
+	//Per axis: 0 open, 1 wall, 2 periodic, 3 outflow (harness), 4 periodic
+	//in x with walls in y (harness: the Rayleigh-Taylor slab).
+	bool periodicX = BoundaryMode == 2 || BoundaryMode == 4;
+	bool periodicY = BoundaryMode == 2;
+	bool wallX     = BoundaryMode == 1;
+	bool wallY     = BoundaryMode == 1 || BoundaryMode == 4;
+	bool offX      = cell.x < 0 || cell.x >= n.x;
+	bool offY      = cell.y < 0 || cell.y >= n.y;
 	if( !inside )
 	{
-		if( BoundaryMode == 2 )
-			source = ( cell + n ) % n;//cell >= -2 and n >= 8, so never negative
-		else if( BoundaryMode == 1 )
-		{
-			//The mirror image across the wall.
-			if( cell.x < 0 )
-				source.x = -1 - cell.x;
-			else if( cell.x >= n.x )
-				source.x = 2 * n.x - 1 - cell.x;
-			if( cell.y < 0 )
-				source.y = -1 - cell.y;
-			else if( cell.y >= n.y )
-				source.y = 2 * n.y - 1 - cell.y;
-		}
+		if( periodicX )
+			source.x = ( cell.x + n.x ) % n.x;//cell >= -2 and n >= 8, so never negative
+		else if( wallX )
+			source.x = cell.x < 0 ? -1 - cell.x : ( cell.x >= n.x ? 2 * n.x - 1 - cell.x : cell.x );
 		else
-			source = clamp( cell, ivec2( 0 ), n - 1 );
+			source.x = clamp( cell.x, 0, n.x - 1 );
+		if( periodicY )
+			source.y = ( cell.y + n.y ) % n.y;
+		else if( wallY )
+			source.y = cell.y < 0 ? -1 - cell.y : ( cell.y >= n.y ? 2 * n.y - 1 - cell.y : cell.y );
+		else
+			source.y = clamp( cell.y, 0, n.y - 1 );
 	}
 
 	Q w = toPrim( texelFetch( TA, source, 0 ), texelFetch( TB, source, 0 ), texelFetch( TC, source, 0 ),
 	              texelFetch( TD, source, 0 ) );
 
-	if( !inside && BoundaryMode == 1 )
+	if( ( offX && wallX ) || ( offY && wallY ) )
 	{
-		//Reflecting: the plasma is mirrored. The field is NOT mirrored: a field line crossing a wall is
-		//continuous through it, and a mirrored one has a kink at the face
-		//that launches a wave every step (it did, and blew up). The ghost's
-		//field is the coils'. The fluxes through a wall face are then
-		//overridden to exactly zero (wallFace below).
-		//No slip: the whole velocity turns round, so the face is at rest.
-		//A slip wall that field lines cross cannot also be a perfect
-		//conductor -- E_t = v_t B_n is not zero -- and the mismatch with the
-		//zero flux of B through the face made a current sheet on the wall
-		//that heated and flung the plasma (|v| 80 in 50 frames). Line-tied
-		//and at rest, E = 0 at the face and every override below is exact.
+		//Reflecting: the plasma is mirrored. The field is NOT mirrored: a
+		//field line crossing a wall is continuous through it, and a mirrored
+		//one has a kink at the face that launches a wave every step (it did,
+		//and blew up). The ghost's field is the coils' field there plus the
+		//mirrored cell's departure from the coils' field: an exact
+		//equilibrium when nothing has happened, and the plasma's own
+		//compression carried through. No slip: the whole velocity turns
+		//round, so the face is at rest. A slip wall that field lines cross
+		//cannot also be a perfect conductor -- E_t = v_t B_n is not zero --
+		//and the mismatch with the zero flux of B through the face made a
+		//current sheet on the wall that heated and flung the plasma (|v| 80
+		//in 50 frames). Line-tied and at rest, E = 0 at the face and every
+		//override in the flux pass is exact.
 		w.q0.yzw = -w.q0.yzw;
 		w.q2.x   = -w.q2.x;
 		w.q1.yzw += vacuumField( cellCentre( cell ) ) - vacuumField( cellCentre( source ) );
@@ -786,7 +792,8 @@ void main()
 
 	int along   = Direction == 0 ? face.x : face.y;
 	int extent  = Direction == 0 ? GridSize.x : GridSize.y;
-	bool wall   = BoundaryMode == 1 && ( along == 0 || along == extent );
+	bool walled = BoundaryMode == 1 || ( BoundaryMode == 4 && Direction == 1 );
+	bool wall   = walled && ( along == 0 || along == extent );
 	if( wall )
 	{
 		F.m.x = 0.0;
@@ -1009,7 +1016,10 @@ void main()
 	if( ProfileKind == 0 )
 		profile = exp( -( r * r ) / ( BallRadius * BallRadius ) );
 	else
-		profile = 0.5 - 0.5 * tanh( ( r - BallRadius ) / ( 0.75 * Dx ) );
+		//Clamped: tanh( x ) is ( e^x - e^-x ) / ( e^x + e^-x ) on this GPU,
+		//inf / inf = NaN for |x| past ~44, and a top hat's far field is
+		//hundreds of cells out -- every cell outside the ball came out NaN.
+		profile = 0.5 - 0.5 * tanh( clamp( ( r - BallRadius ) / ( 0.75 * Dx ), -20.0, 20.0 ) );
 
 	//Bright parts of the picture push harder. At ClipHeats 1 a white pixel
 	//starts at twice the ball's pressure and a black one at none of it.

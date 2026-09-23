@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <cstdio>
 #include <cmath>
 #include <string>
 
@@ -757,6 +758,11 @@ int ContainmentPlugin::StepForTest( double duration, int limit )
 {
 	int taken       = 0;
 	double remaining = duration;
+	//The stirring moves on once per call, as it does once per frame.
+	{
+		const Model m = CurrentModel();
+		drive.Advance( duration, m.driveScale, m.drive );
+	}
 	while( remaining > duration * 1e-7 && taken < limit )
 	{
 		//Plan exactly, from the speeds as they stand.
@@ -785,6 +791,13 @@ int ContainmentPlugin::StepForTest( double duration, int limit )
 			return -1;
 		remaining -= values[ 1 ];
 		simTime += values[ 1 ];
+	}
+	//The last update's flags are only counted by a reduction after it.
+	{
+		Clock( 0, 1, 0.0 );
+		float values[ 4 ] = {};
+		ReadClock( values );
+		floorHits += values[ 3 ];
 	}
 	return remaining > duration * 1e-6 ? -1 : taken;
 }

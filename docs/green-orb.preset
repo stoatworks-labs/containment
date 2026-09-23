@@ -1,0 +1,16 @@
+# Green Orb: the look the spec asks for -- a luminous green ball in a black
+# void, writhing, with tendrils and a heavy glow. Everything here is a
+# physical setting; nothing is drawn. Apply with
+#   cttest --preset docs/green-orb.preset --out orb.png
+Poles=2
+Coil Spin=0.62
+Curvature=0.36
+Drive=0.33
+Drive Scale=0.4
+Temperature Tint=0.9
+Ramp=1
+Glow=0.62
+Field Lines=0.35
+Field Line Count=0.25
+Exposure=0.45
+Mix=1
