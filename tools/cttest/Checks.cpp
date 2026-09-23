@@ -1,5 +1,7 @@
 #include "Checks.h"
 
+#include "Presets.h"
+
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -806,12 +808,13 @@ int RunGlow( const Perturb& perturb )
 		rig.Set( PT_DETAIL, DetailParam( 512 ) );
 		rig.Render( 120 );
 		const Grid& g  = rig.plugin.CurrentGrid();
-		const Floats e = ReadTexture( rig.plugin.EmissionTextureID(), g.nx, g.ny );
+		const int ew = rig.plugin.EmissionWidth(), eh = rig.plugin.EmissionHeight();
+		const Floats e = ReadTexture( rig.plugin.EmissionTextureID(), ew, eh );
 		double total   = 0.0;
 		for( size_t i = 0; i < e.size(); i += 4 )
 			total += e[ i ] + e[ i + 1 ] + e[ i + 2 ];
 		const int gw = rig.plugin.GlowWidth(), gh = rig.plugin.GlowHeight();
-		const double scale = static_cast< double >( g.nx ) * g.ny / ( static_cast< double >( gw ) * gh );
+		const double scale = static_cast< double >( ew ) * eh / ( static_cast< double >( gw ) * gh );
 		const double bound = 6.0 * 233.0 * std::ldexp( 1.0, -24 );
 		for( int stage = 0; stage < kGlowStages; ++stage )
 		{
@@ -821,9 +824,9 @@ int RunGlow( const Perturb& perturb )
 				sum += glow[ i ] + glow[ i + 1 ] + glow[ i + 2 ];
 			sum *= scale;
 			Check( std::abs( sum / total - 1.0 ) < bound,
-			       fmt( "stage %d (sigma %.3f of the frame height, on a %dx%d copy of the %dx%d grid): %.8f of the emission "
+			       fmt( "stage %d (sigma %.3f of the frame height, on a %dx%d copy of the %dx%d frame): %.8f of the emission "
 			            "(bound 1 +- %.1e)",
-			            stage, kGlowSigma[ stage ], gw, gh, g.nx, g.ny, sum / total, bound ) );
+			            stage, kGlowSigma[ stage ], gw, gh, ew, eh, sum / total, bound ) );
 		}
 	}
 	//On the raster: the whole picture's light with Glow 0.6 and Glow 0,
@@ -1563,7 +1566,7 @@ int RunResist( const Perturb& perturb )
 	for( int j = 0; j < g.ny; ++j )
 		for( int i = 0; i < g.nx; ++i )
 		{
-			const double x = ( i + 0.5 ) * g.dx - 0.5, y = ( j + 0.5 ) * g.dx - 0.5;
+			const double x = ( i + 0.5 ) * g.dx - 0.5 * g.lx, y = ( j + 0.5 ) * g.dx - 0.5 * g.ly;
 			const double bz = 1.0 + bump * std::exp( -( x * x + y * y ) / ( width * width ) );
 			//Total pressure uniform: a static plasma. As B diffuses the
 			//pressure hole that balanced it stays put, and the gas has to
@@ -1693,6 +1696,214 @@ int RunMutation( const Perturb& )
 
 
 //===========================================================================
+// --open
+//===========================================================================
+namespace
+{
+struct LongRun
+{
+	double tau, floorFraction, rhoMin, bMax, bMax0, emissionPeak0, emissionPeak;
+	bool finite;
+};
+
+LongRun RunLong( bool legacy, double tauTarget )
+{
+	TestModel model;
+	model.legacyOpen = legacy;
+	Rig rig;
+	rig.plugin.SetModelForTest( model );
+	rig.Init( 320, 180 );
+	rig.Set( PT_SPEED, ParamFromSpeed( 0.84f ) );//0.014 tau_A a frame
+	LongRun out {};
+	auto measure = [ & ]( double& bmax, double& rmin, double& epeak ) {
+		const Snapshot s = Snapshot::Take( rig.plugin );
+		out.finite       = s.Finite();
+		bmax = 0.0;
+		rmin = 1e30;
+		for( int j = 0; j < s.ny; ++j )
+			for( int i = 0; i < s.nx; ++i )
+			{
+				bmax = std::max( bmax, std::sqrt( s.Bx( i, j ) * s.Bx( i, j ) + s.By( i, j ) * s.By( i, j )
+				                                  + s.Bz( i, j ) * s.Bz( i, j ) ) );
+				rmin = std::min( rmin, s.Rho( i, j ) );
+			}
+		const Floats e = ReadTexture( rig.plugin.EmissionTextureID(), rig.plugin.EmissionWidth(), rig.plugin.EmissionHeight() );
+		epeak          = 0.0;
+		for( size_t k = 3; k < e.size(); k += 4 )
+			epeak = std::max( epeak, static_cast< double >( e[ k ] ) );
+	};
+	rig.Render( 60 );
+	double r0 = 0.0;
+	measure( out.bMax0, r0, out.emissionPeak0 );
+	out.bMax   = out.bMax0;
+	out.rhoMin = r0;
+	while( rig.plugin.SimTime() < tauTarget && out.finite )
+	{
+		rig.Render( 100 );
+		double b, r, e;
+		measure( b, r, e );
+		out.bMax         = std::max( out.bMax, b );
+		if( std::getenv( "CT_DBG" ) )
+			Say( "    t %.2f  |B| max %.3f  rho min %.4f  emission %.3f\n", rig.plugin.SimTime(), b, r, e );
+		out.rhoMin       = std::min( out.rhoMin, r );
+		out.emissionPeak = e;
+	}
+	const Grid& g     = rig.plugin.CurrentGrid();
+	out.tau           = rig.plugin.SimTime();
+	out.floorFraction = rig.plugin.FloorHits() / ( static_cast< double >( g.nx ) * g.ny * rig.plugin.SubstepsTaken() );
+	return out;
+}
+
+/// An outgoing fast pulse, and what comes back of it. Uniform ambient plasma
+/// in a uniform axial field (so the absorbing layer's reference IS the
+/// background), a small right-going simple wave; returns the largest density
+/// disturbance left in the frame once the pulse has gone and anything the
+/// boundary sent back has had time to arrive, over the incident amplitude.
+double Reflection( bool legacy, double& incident )
+{
+	TestModel model;
+	model.legacyOpen = legacy;
+	Rig rig;
+	rig.plugin.SetModelForTest( model );
+	rig.Init( 256, 256 );
+	rig.Quiet();
+	rig.Set( PT_DETAIL, DetailParam( 256 ) );
+	rig.Set( PT_SPEED, 0.0f );
+	rig.Set( PT_BOUNDARY, 0.0f );
+	rig.Set( PT_POLES, PolesParam( 0 ) );
+	rig.Set( PT_FIELD, FieldParam( 1.0 ) );
+	rig.Set( PT_GUIDE_FIELD, GuideParam( 1.0 ) );
+	rig.Render( 1 );
+	const Grid& g = rig.plugin.CurrentGrid();
+	const double rho0 = kBackgroundDensity, p0 = kBackgroundPressure, b0 = 1.0, eps = 1e-3, width = 0.03;
+	const double cs2 = kGamma * p0 / rho0, cf = std::sqrt( ( kGamma * p0 + b0 * b0 ) / rho0 );
+	const double frameLeft = g.ox * g.dx, frameRight = ( g.ox + g.fx ) * g.dx;
+	const double x0 = 0.5 * ( frameLeft + frameRight ) + 0.25;
+	StateBuilder sb( g.nx, g.ny, kGamma );
+	for( int j = 0; j < g.ny; ++j )
+		for( int i = 0; i < g.nx; ++i )
+		{
+			const double x  = ( i + 0.5 ) * g.dx;
+			const double dr = eps * rho0 * std::exp( -0.5 * ( x - x0 ) * ( x - x0 ) / ( width * width ) );
+			//The linear fast simple wave going +x, perpendicular to B.
+			sb.Set( i, j, rho0 + dr, cf * dr / rho0, 0, 0, p0 + cs2 * dr, 0, 0, b0 * ( 1.0 + dr / rho0 ) );
+		}
+	sb.Load( rig.plugin );
+	//The fast characteristics of a wave across B: w+- = dP_total +- rho c_f du.
+	//The incident pulse is all w+ (2 rho c_f^2 eps rho0 at its peak); what
+	//the boundary sends back is w-. The pulse's own dispersive tail is still
+	//w+, and anything left at rest (an entropy mode) has dP = du = 0 -- so w-
+	//is the reflection and nothing else.
+	auto characteristic = [ & ]( const Snapshot& s, int i, int j, double sign ) {
+		const double dP = ( s.P( i, j ) - p0 ) + 0.5 * ( s.Bz( i, j ) * s.Bz( i, j ) - b0 * b0 );
+		return dP + sign * rho0 * cf * s.U( i, j );
+	};
+	incident = 0.0;
+	{
+		const Snapshot s = Snapshot::Take( rig.plugin );
+		for( int i = g.ox; i < g.ox + g.fx; ++i )
+			incident = std::max( incident, std::abs( characteristic( s, i, g.ny / 2, 1.0 ) ) );
+	}
+	//Long enough for the pulse to reach the grid's far edge and come back
+	//across the whole frame.
+	const double t = ( 2.0 * ( g.lx - x0 ) + 0.5 ) / cf;
+	rig.plugin.StepForTest( t );
+	const Snapshot s = Snapshot::Take( rig.plugin );
+	double worst     = 0.0;
+	for( int j = g.oy; j < g.oy + g.fy; ++j )
+		for( int i = g.ox; i < g.ox + g.fx; ++i )
+			worst = std::max( worst, std::abs( characteristic( s, i, j, -1.0 ) ) );
+	return worst / incident;
+}
+} // namespace
+
+int RunOpen( const Perturb& perturb )
+{
+	Say( "\n=== open: the frame is a window onto a bigger bottle -- waves leave, nothing drains, it lasts\n" );
+	const bool legacy = perturb.legacyOpen;
+	double incident   = 0.0;
+	const double R    = Reflection( legacy, incident );
+	//The bound: the layer takes 6 e-foldings off the fastest wave each way,
+	//so what the grid's outer edge sends back arrives at e^-12 = 6e-6. What
+	//is left is the layer's own gradient, a smooth quadratic ramp 26 cells
+	//deep, and the scheme's dispersion of the pulse (sigma = 8 cells), which
+	//leaves a trailing ripple of the order of the second-order phase error,
+	//( k dx )^2 ~ 1% of the pulse. 2% covers both; an edge that reflects
+	//outright sends back O(10%) and more.
+	Check( R < 0.02, fmt( "%san outgoing fast pulse: %.3f%% of it comes back into the frame as a reflected wave (bound 2%%)",
+	                      legacy ? "OLD ZERO-GRADIENT GHOST, " : "", 100 * R ) );
+	const LongRun run = RunLong( legacy, 20.0 );
+	//Sound: finite; floors as rare as `--floors` demands; the field no more
+	//than twice the coils' own peak on the grid (a runaway goes past that in
+	//a few tau_A); nowhere emptier than a tenth of the ambient density; and
+	//the fuelled ball still there -- its emission at least a quarter of what
+	//it was once it had settled.
+	const bool ok = run.finite && run.tau >= 20.0 && run.floorFraction < 1e-4 && run.bMax < 2.0 * run.bMax0
+	                && run.rhoMin > 0.1 * kBackgroundDensity && run.emissionPeak > 0.25 * run.emissionPeak0;
+	Check( ok, fmt( "%sthe default look for %.1f tau_A: finite %s, floors on %.1e of cell-steps (bound 1e-4), |B| peak "
+	                "%.2f against %.2f at the start (bound 2x), rho min %.4f (bound %.3f), the ball's emission %.3f of "
+	                "its settled %.3f (bound a quarter)",
+	                legacy ? "OLD ZERO-GRADIENT GHOST, " : "", run.tau, run.finite ? "yes" : "NO", run.floorFraction,
+	                run.bMax, run.bMax0, run.rhoMin, 0.1 * kBackgroundDensity, run.emissionPeak, run.emissionPeak0 ) );
+	return g_failures;
+}
+
+//===========================================================================
+// --presets
+//===========================================================================
+int RunPresets( const Perturb& )
+{
+	Say( "\n=== presets: each row sets exactly its values, Custom leaves the controls alone, row 1 is the defaults\n" );
+	ContainmentPlugin plugin;
+	const unsigned int targets[ presets::kParamCount ] = {
+		PT_BALL_SIZE, PT_TEMPERATURE, PT_PROFILE, PT_FEED,    PT_CLIP_HEATS, PT_FUEL,        PT_FIELD,  PT_GUIDE_FIELD,
+		PT_POLES,     PT_COIL_RADIUS, PT_COIL_SPIN, PT_CURVATURE, PT_QUENCH, PT_BOUNDARY,    PT_RESISTIVITY, PT_COOLING,
+		PT_DRIVE,     PT_DRIVE_SCALE, PT_EXPOSURE, PT_TINT,    PT_RAMP,       PT_GLOW,        PT_FIELD_LINES, PT_LINE_COUNT,
+	};
+	const bool discrete[ presets::kParamCount ] = { false, false, true,  false, false, false, false, false,
+		                                            true,  false, false, false, true,  true,  false, false,
+		                                            false, false, false, false, true,  false, false, false };
+	//The defaults, as the constructor set them.
+	std::vector< float > defaults( PT_COUNT );
+	for( unsigned int i = 0; i < PT_COUNT; ++i )
+		defaults[ i ] = plugin.GetFloatParameter( i );
+	int differ = 0;
+	for( int c = 0; c < presets::kParamCount; ++c )
+		if( defaults[ targets[ c ] ] != presets::kPresets[ 0 ].v[ c ] )
+			++differ;
+	Check( differ == 0, fmt( "row 1, \"%s\", is the constructor's defaults in all %d columns (%d differ)",
+	                         presets::kPresets[ 0 ].name, presets::kParamCount, differ ) );
+	//An operator's own values, all different from every row's.
+	for( int c = 0; c < presets::kParamCount; ++c )
+		plugin.SetFloatParameter( targets[ c ], discrete[ c ] ? 0.0f : 0.123f );
+	plugin.SetFloatParameter( PT_BALL_X, 0.321f );
+	for( int r = 0; r <= presets::kCount; ++r )
+	{
+		plugin.SetFloatParameter( PT_PRESET, static_cast< float >( r ) );
+		int wrong = 0, fractions = 0;
+		for( int c = 0; c < presets::kParamCount; ++c )
+		{
+			const float want = r == 0 ? ( discrete[ c ] ? 0.0f : 0.123f ) : presets::kPresets[ r - 1 ].v[ c ];
+			if( plugin.EffectiveForTest( targets[ c ] ) != want )
+				++wrong;
+			if( r > 0 && discrete[ c ] && want != std::round( want ) )
+				++fractions;
+		}
+		//What a row does not own stays the operator's.
+		if( plugin.EffectiveForTest( PT_BALL_X ) != 0.321f )
+			++wrong;
+		Check( wrong == 0 && fractions == 0,
+		       fmt( "%-20s every column as the row says, Ball X still the operator's (%d wrong, %d fractions in discrete "
+		            "columns)",
+		            r == 0 ? "Custom:" : ( std::string( presets::kPresets[ r - 1 ].name ) + ":" ).c_str(), wrong, fractions ) );
+	}
+	//And the host sees the rows by name.
+	Check( std::string( plugin.GetParamName( PT_PRESET ) ) == "Preset",
+	       fmt( "the dropdown is called \"%s\" and has %d rows plus Custom", plugin.GetParamName( PT_PRESET ), presets::kCount ) );
+	return g_failures;
+}
+
+//===========================================================================
 // --negative
 //===========================================================================
 int RunNegative()
@@ -1724,6 +1935,8 @@ int RunNegative()
 	add( "quench", RunQuench, "predict with gamma 7/5", []( Perturb& p ) { p.quenchGamma = 1.4; } );
 	add( "resist", RunResist, "expect eta twice as big", []( Perturb& p ) { p.resistFactor = 2.0; } );
 	add( "floors", RunFloors, "run with the floors off", []( Perturb& p ) { p.floorsOff = true; } );
+	add( "open", RunOpen, "Open as it was: the zero-gradient ghost, no margin, no absorbing layer",
+	     []( Perturb& p ) { p.legacyOpen = true; } );
 	if( const char* only = std::getenv( "CT_NEGATIVE" ) )
 		cases.erase( std::remove_if( cases.begin(), cases.end(), [ & ]( const Case& c ) { return std::string( c.name ) != only; } ),
 		             cases.end() );

@@ -32,8 +32,16 @@ void main()
 // The grid, the gas and the coils: shared by every pass that touches state.
 //---------------------------------------------------------------------------
 const char* const kCommon = R"(
-uniform ivec2 GridSize;   //cells
+uniform ivec2 GridSize;   //cells, the margin included
 uniform float Dx;         //cell size, frame heights (square cells)
+uniform ivec2 FrameOrigin;//the frame's first cell: the margin (Open), else 0
+uniform ivec2 FrameCells; //the frame's own cells
+
+//The clip's coordinates at a cell. The margin reads the clip's edge.
+vec2 clipUV( ivec2 cell )
+{
+	return clamp( ( vec2( cell - FrameOrigin ) + 0.5 ) / vec2( FrameCells ), 0.0, 1.0 );
+}
 uniform float Gamma;      //5/3; 2 for Brio-Wu
 uniform int BoundaryMode; //0 open, 1 conducting wall, 2 periodic (harness only)
 uniform int UseFloors;    //1: rho and p are clamped to the floors below
@@ -862,6 +870,8 @@ uniform float CoolingFloorT;//no cooling below this temperature
 uniform float GLMAlpha;
 uniform int UseEntropy;     //the dual-energy switch
 uniform float EntropySwitch;//p below this fraction of kinetic + magnetic: use K
+uniform float SpongeEFolds; //0: no absorbing layer; else what the fastest wave loses crossing it
+uniform float SpongePower;  //the rate rises as depth^SpongePower
 
 layout( location = 0 ) out vec4 outA;
 layout( location = 1 ) out vec4 outB;
@@ -977,6 +987,41 @@ void main()
 		B.x = p / ( Gamma - 1.0 ) + kin + mag;
 	C.z = A.x * p / pow( A.x, Gamma );
 
+	//-------------------------------------------------------------------
+	// Open's absorbing layer, in the margin outside the frame and nowhere
+	// else. The frame is a window onto a bigger bottle, full of the ambient
+	// plasma at rest in the coils' own field; in the margin the plasma is
+	// relaxed towards exactly that, at a rate rising as the square of the
+	// depth, and sized so that the fastest wave (c_h) loses SpongeEFolds
+	// e-foldings on the way in -- and as many again on the way back. The
+	// relaxation is exact for the step, so no rate is too stiff. The picture
+	// is kept; the ball marker fades with the rest.
+	//-------------------------------------------------------------------
+	if( SpongeEFolds > 0.0 && FrameOrigin.x > 0 )
+	{
+		vec2 x     = cellCentre( cell );
+		vec2 lo    = vec2( FrameOrigin ) * Dx;
+		vec2 hi    = vec2( FrameOrigin + FrameCells ) * Dx;
+		vec2 out2  = max( max( lo - x, x - hi ), vec2( 0.0 ) );
+		float w    = float( FrameOrigin.x ) * Dx;
+		float s    = clamp( max( out2.x, out2.y ) / w, 0.0, 1.0 );
+		if( s > 0.0 )
+		{
+			//A wave at v crossing the layer loses rate * w / ( 3 v ).
+			float rate = ( SpongePower + 1.0 ) * SpongeEFolds * gCh / w * pow( s, SpongePower );
+			float f    = exp( -rate * dt );
+			Q q        = toPrim( A, B, C, D );
+			q.q0.x     = AmbientDensity + ( q.q0.x - AmbientDensity ) * f;
+			q.q0.yzw  *= f;
+			q.q1.x     = AmbientPressure + ( q.q1.x - AmbientPressure ) * f;
+			vec3 bv    = vacuumField( x );
+			q.q1.w     = bv.z + ( q.q1.w - bv.z ) * f;
+			q.q2.x    *= f;
+			q.q3.a    *= f;
+			toCons( q, A, B, C, D );
+		}
+	}
+
 	Q w  = toPrim( A, B, C, D );
 	outA = A;
 	outB = B;
@@ -1008,8 +1053,7 @@ void main()
 {
 	ivec2 cell = ivec2( gl_FragCoord.xy );
 	vec2 x     = cellCentre( cell );
-	vec2 uv    = ( vec2( cell ) + 0.5 ) / vec2( GridSize );
-	vec4 clip  = texture( InputTexture, uv * MaxUV );
+	vec4 clip  = texture( InputTexture, clipUV( cell ) * MaxUV );
 
 	float r = length( x - BallCentre );
 	float profile;
@@ -1052,6 +1096,13 @@ uniform vec2 MaxUV;
 uniform float FeedFraction; //this frame's step of the tracer towards the clip
 uniform float ClipHeatRate; //dp for a white pixel inside the ball, this frame
 uniform float AudioHeatRate;//dp inside the ball, this frame
+uniform float FuelFraction; //this frame's step of the footprint towards its ignition profile
+uniform vec2 BallCentre;
+uniform float BallRadius;
+uniform int ProfileKind;
+uniform float BallPressure;
+uniform float BgDensity;
+uniform float BgPressure;
 uniform int PelletCount;    //pellets landing this frame
 uniform vec2 PelletCentre;
 uniform float PelletDensity;
@@ -1083,8 +1134,7 @@ void main()
 	Q w    = toPrim( A, B, C, D );
 
 	vec2 x    = cellCentre( cell );
-	vec2 uv   = ( vec2( cell ) + 0.5 ) / vec2( GridSize );
-	vec4 clip = clamp( texture( InputTexture, uv * MaxUV ), 0.0, 1.0 );
+	vec4 clip = clamp( texture( InputTexture, clipUV( cell ) * MaxUV ), 0.0, 1.0 );
 	float chi = clamp( w.q3.a, 0.0, 1.0 );
 	float luma = dot( clip.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
 
@@ -1104,6 +1154,28 @@ void main()
 
 	//Heating: the clip's light (through Feed) and the audio, in the ball.
 	w.q1.x += ( ClipHeatRate * luma + AudioHeatRate ) * chi;
+
+	//Fuel: a steady gas puff. Below the ignition profile, density and
+	//pressure are topped back up towards it by FuelFraction this frame; the
+	//new gas arrives at rest (momentum unchanged) carrying the clip's colour
+	//and marked as ball. It never takes anything away.
+	if( FuelFraction > 0.0 )
+	{
+		float r = length( x - BallCentre );
+		float profile = ProfileKind == 0 ? exp( -( r * r ) / ( BallRadius * BallRadius ) )
+		                                 : 0.5 - 0.5 * tanh( clamp( ( r - BallRadius ) / ( 0.75 * Dx ), -20.0, 20.0 ) );
+		float rhoT = BgDensity + ( 1.0 - BgDensity ) * profile;
+		float pT   = BgPressure + ( BallPressure - BgPressure ) * profile;
+		float add  = max( rhoT - w.q0.x, 0.0 ) * FuelFraction;
+		if( add > 0.0 )
+		{
+			float rn  = w.q0.x + add;
+			w.q0.yzw *= w.q0.x / rn;
+			w.q3      = mix( w.q3, vec4( clip.rgb, 1.0 ), add / rn );
+			w.q0.x    = rn;
+		}
+		w.q1.x += max( pT - w.q1.x, 0.0 ) * FuelFraction;
+	}
 
 	//A pellet: cold, dense, at rest. Momentum and pressure are unchanged, so
 	//the ball has to share its motion with it and it arrives cold.
@@ -1166,7 +1238,8 @@ vec3 diverging( float s )//-1..1: blue, black, red
 
 void main()
 {
-	ivec2 cell = ivec2( gl_FragCoord.xy );
+	//The emission covers the frame, not the margin.
+	ivec2 cell = ivec2( gl_FragCoord.xy ) + FrameOrigin;
 	Q w = fetchPrim( StateA, StateB, StateC, StateD, cell );
 	float r = w.q0.x;
 	float p = w.q1.x;
@@ -1372,6 +1445,7 @@ uniform float CoreWeight;  //1 - GlowAmount: what the glare took from the core
 uniform vec3 GlowShare;
 uniform float LineAmount;
 uniform float LineSpacing; //A_z between two drawn field lines; 0 = none
+uniform vec4 PotentialMap; //frame uv -> the grid's: uv * xy + zw (the potential covers the margin)
 uniform float MixAmount;
 
 in vec2 uv;
@@ -1415,7 +1489,7 @@ void main()
 		//by the plasma sitting on them.
 		if( LineAmount > 0.0 && LineSpacing > 0.0 )
 		{
-			float f  = texture( Potential, uv ).r / LineSpacing;
+			float f  = texture( Potential, uv * PotentialMap.xy + PotentialMap.zw ).r / LineSpacing;
 			float fw = max( fwidth( f ), 1e-6 );
 			float d  = abs( fract( f + 0.5 ) - 0.5 ) / fw;
 			//Where the lines are closer than about two pixels they cannot be

@@ -54,6 +54,7 @@ struct Perturb
 	double resistFactor   = 1.0;  ///< --resist expects this times eta
 	bool stillUlp         = false;///< --still expects one ulp more in one pixel
 	bool additiveGlow     = false;///< run the plugin's glow as an additive bloom
+	bool legacyOpen       = false;///< run Open as it was: zero-gradient ghost, no absorbing layer
 };
 
 //---------------------------------------------------------------------------

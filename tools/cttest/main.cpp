@@ -420,7 +420,7 @@ int main( int argc, char** argv )
 		{ "briowu", RunBrioWu }, { "alfven", RunAlfven }, { "conserve", RunConserve }, { "divb", RunDivB },
 		{ "balance", RunBalance }, { "rt", RunRT },       { "cusp", RunCusp },         { "frozen", RunFrozen },
 		{ "quench", RunQuench }, { "resist", RunResist }, { "floors", RunFloors },     { "still", RunStill },
-		{ "glow", RunGlow },     { "state", RunState },   { "mutation", RunMutation }, { "equilibrium", RunEquilibrium },
+		{ "glow", RunGlow },     { "state", RunState },   { "mutation", RunMutation }, { "equilibrium", RunEquilibrium }, { "open", RunOpen }, { "presets", RunPresets },
 	};
 
 	int result = -1;
@@ -469,7 +469,7 @@ int main( int argc, char** argv )
 						bmax = std::max( bmax, std::sqrt( s.Bx( i, j ) * s.Bx( i, j ) + s.By( i, j ) * s.By( i, j ) + s.Bz( i, j ) * s.Bz( i, j ) ) );
 						vmax = std::max( vmax, std::sqrt( s.U( i, j ) * s.U( i, j ) + s.V( i, j ) * s.V( i, j ) ) );
 					}
-				const Floats e = ReadTexture( rig.plugin.EmissionTextureID(), s.nx, s.ny );
+				const Floats e = ReadTexture( rig.plugin.EmissionTextureID(), rig.plugin.EmissionWidth(), rig.plugin.EmissionHeight() );
 				double emax = 0;
 				for( size_t k = 3; k < e.size(); k += 4 )
 					emax = std::max( emax, static_cast< double >( e[ k ] ) );
@@ -480,7 +480,7 @@ int main( int argc, char** argv )
 						for( int i = 0; i < s.nx; ++i )
 						{
 							const size_t o = s.At( i, j );
-							img[ o + 0 ] = s.c[ o + 3 ];
+							img[ o + 0 ] = static_cast< float >( std::min( 1.0, std::hypot( s.U( i, j ), s.V( i, j ) ) / 3.0 ) );
 							img[ o + 1 ] = static_cast< float >( std::clamp( ( std::log10( std::max( s.P( i, j ), 1e-9 ) ) + 6.0 ) / 6.0, 0.0, 1.0 ) );
 							img[ o + 2 ] = static_cast< float >( std::clamp( s.Rho( i, j ), 0.0, 1.0 ) );
 							img[ o + 3 ] = 1.0f;

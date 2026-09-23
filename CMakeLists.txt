@@ -71,6 +71,7 @@ add_library(containment_core OBJECT
     source/PassBuffer.h
     source/PassBuffer.cpp
     source/GLState.h
+    source/Presets.h
     source/Shaders.h
     source/Shaders.cpp
     source/Containment.h

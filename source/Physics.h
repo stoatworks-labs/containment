@@ -48,18 +48,24 @@ void VacuumField( const Coils& coils, double x, double y, double& bx, double& by
 /// The flux function A_z of the coils' in-plane field: B_perp = grad A_z x z.
 double VacuumPotential( const Coils& coils, double x, double y );
 
-/// The grid: square cells, `cells` on the short side, the long side rounded to
-/// a multiple of 8 so the glow's three 2x reductions are exact.
+/// The grid: square cells, `cells` on the frame's short side, the frame's long
+/// side rounded to a multiple of 8 so the glow's three 2x reductions are
+/// exact -- and, for Open, a margin of `margin` cells all round the frame that
+/// is simulated but never shown (it holds the absorbing layer).
 struct Grid
 {
-	int nx    = 0;
+	int nx    = 0;  ///< simulated cells, margin included
 	int ny    = 0;
+	int fx    = 0;  ///< the frame's own cells
+	int fy    = 0;
+	int ox    = 0;  ///< where the frame starts, in cells (the margin)
+	int oy    = 0;
 	double dx = 0.0;///< cell size, frame heights
 	double lx = 0.0;///< nx * dx
-	double ly = 0.0;///< ny * dx: 1 on a landscape frame
+	double ly = 0.0;///< ny * dx: 1 on a landscape frame with no margin
 };
 
-Grid ChooseGrid( int width, int height, int cells );
+Grid ChooseGrid( int width, int height, int cells, int margin = 0 );
 
 /// A 32-bit PCG generator (O'Neill), for the drive's random walk and nothing
 /// in a shader.

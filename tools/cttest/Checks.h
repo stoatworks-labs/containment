@@ -21,6 +21,8 @@ int RunGlow( const Perturb& perturb );
 int RunState( const Perturb& perturb );
 int RunMutation( const Perturb& perturb );
 int RunEquilibrium( const Perturb& perturb );
+int RunOpen( const Perturb& perturb );
+int RunPresets( const Perturb& perturb );
 int RunNegative();
 int RunBench();
 } // namespace cttest

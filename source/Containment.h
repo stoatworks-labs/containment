@@ -37,6 +37,7 @@ struct TestModel
 	double gravityCore  = -1.0; ///< < 0: the shipped taper
 	bool uniformGravity = false;///< g_eff not scaled by T / T_ref (the textbook RT slab)
 	bool additiveGlow   = false;///< the glare ADDED rather than moved (the wrong model)
+	bool legacyOpen     = false;///< Open as it was: no margin, no absorbing layer (the wrong model)
 	float backgroundDensity  = kBackgroundDensity;
 	float backgroundPressure = kBackgroundPressure;
 };
@@ -81,6 +82,14 @@ public:
 		test = model;
 	}
 
+	/// A parameter's effective value: the operator's, or the preset's where
+	/// the Preset dropdown is on anything but Custom.
+	float P( unsigned int index ) const;
+	float EffectiveForTest( unsigned int index ) const
+	{
+		return P( index );
+	}
+
 	const Grid& CurrentGrid() const
 	{
 		return grid;
@@ -110,6 +119,14 @@ public:
 	/// non-finite state, or `limit` substeps without getting there).
 	int StepForTest( double duration, int limit = 200000 );
 
+	int EmissionWidth() const
+	{
+		return grid.fx;
+	}
+	int EmissionHeight() const
+	{
+		return grid.fy;
+	}
 	GLuint EmissionTextureID() const
 	{
 		return emission.TextureID();

@@ -47,6 +47,11 @@ float ClipHeatsFromParam( float value )
 	return clamp01( value );
 }
 
+float FuelFromParam( float value )
+{
+	return linear( value, 0.0f, 2.0f );
+}
+
 float FieldFromParam( float value )
 {
 	return geometric( value, 0.25f, 4.0f );

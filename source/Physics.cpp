@@ -75,7 +75,7 @@ Coils MakeCoils( int poles, double radius, double angle, double field, double gu
 }
 
 //---------------------------------------------------------------------------
-Grid ChooseGrid( int width, int height, int cells )
+Grid ChooseGrid( int width, int height, int cells, int margin )
 {
 	Grid grid;
 	const bool landscape = width >= height;
@@ -84,12 +84,15 @@ Grid ChooseGrid( int width, int height, int cells )
 	const int shortSide  = cells;
 	const int longSide   = std::max( 8, 8 * static_cast< int >( std::lround( shortSide * aspect / 8.0 ) ) );
 
-	grid.nx = landscape ? longSide : shortSide;
-	grid.ny = landscape ? shortSide : longSide;
+	grid.fx = landscape ? longSide : shortSide;
+	grid.fy = landscape ? shortSide : longSide;
+	grid.ox = grid.oy = std::max( margin, 0 );
+	grid.nx = grid.fx + 2 * grid.ox;
+	grid.ny = grid.fy + 2 * grid.oy;
 	//The frame height is 1 whichever way round the frame is.
-	grid.dx = 1.0 / grid.ny;
+	grid.dx = 1.0 / grid.fy;
 	grid.lx = grid.nx * grid.dx;
-	grid.ly = 1.0;
+	grid.ly = grid.ny * grid.dx;
 	return grid;
 }
 

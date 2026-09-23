@@ -300,6 +300,7 @@ void Rig::Quiet()
 {
 	Set( PT_FEED, 0.0f );
 	Set( PT_CLIP_HEATS, 0.0f );
+	Set( PT_FUEL, 0.0f );
 	Set( PT_DRIVE, 0.0f );
 	Set( PT_COIL_SPIN, 0.5f );
 	Set( PT_CURVATURE, 0.0f );

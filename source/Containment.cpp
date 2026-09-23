@@ -2,6 +2,7 @@
 
 #include "Diag.h"
 #include "GLState.h"
+#include "Presets.h"
 
 //FFGLSDK.h includes every other scoped binding and omits this one (SDK
 //b1afaf9), so it has to be asked for by name.
@@ -150,6 +151,23 @@ int gaussianWeights( double sigma, std::vector< float >& weights )
 }
 } // namespace
 
+/// Which ParamId each preset column drives.
+constexpr ParamId kPresetTarget[ presets::kParamCount ] = {
+	PT_BALL_SIZE, PT_TEMPERATURE, PT_PROFILE, PT_FEED,    PT_CLIP_HEATS, PT_FUEL,        PT_FIELD,  PT_GUIDE_FIELD,
+	PT_POLES,     PT_COIL_RADIUS, PT_COIL_SPIN, PT_CURVATURE, PT_QUENCH, PT_BOUNDARY,    PT_RESISTIVITY, PT_COOLING,
+	PT_DRIVE,     PT_DRIVE_SCALE, PT_EXPOSURE, PT_TINT,    PT_RAMP,       PT_GLOW,        PT_FIELD_LINES, PT_LINE_COUNT,
+};
+
+float ContainmentPlugin::P( unsigned int index ) const
+{
+	const int preset = std::clamp( static_cast< int >( std::lround( params[ PT_PRESET ] ) ), 0, presets::kCount );
+	if( preset > 0 && index != PT_PRESET )
+		for( int c = 0; c < presets::kParamCount; ++c )
+			if( kPresetTarget[ c ] == index )
+				return presets::kPresets[ preset - 1 ].v[ c ];
+	return index < PT_COUNT ? params[ index ] : 0.0f;
+}
+
 static_assert( PT_COUNT - PT_ABOUT_TEXT == stoatworks::about::kParamCount,
                "the About run no longer matches StoatworksAbout.h -- add or remove a PT_ABOUT_BUTTON_n to match" );
 
@@ -176,6 +194,7 @@ ContainmentPlugin::ContainmentPlugin()
 	// layer shows a live, writhing plasma straight away. The clip keeps its
 	// own colours (Temperature Tint 0); docs/green-orb.preset is the green look.
 	//-------------------------------------------------------------------
+	params[ PT_PRESET ]      = 0.0f;//Custom: the controls are the truth
 	params[ PT_IGNITE ]      = 0.0f;
 	params[ PT_BALL_SIZE ]   = 0.389f;//0.18 frame heights
 	params[ PT_BALL_X ]      = 0.5f;
@@ -185,6 +204,7 @@ ContainmentPlugin::ContainmentPlugin()
 	params[ PT_PELLET ]      = 0.0f;
 	params[ PT_FEED ]        = 0.1f;
 	params[ PT_CLIP_HEATS ]  = 0.0f;
+	params[ PT_FUEL ]        = 0.15f; //0.3 per tau_A: an open bottle that does not run down
 
 	params[ PT_FIELD ]       = 0.25f; //0.5 B_ref at the rim
 	params[ PT_GUIDE_FIELD ] = 0.7f;  //Bz = 1.4 Field: the guide field holds the ball, the cusp shapes it
@@ -193,7 +213,7 @@ ContainmentPlugin::ContainmentPlugin()
 	params[ PT_COIL_SPIN ]   = 0.55f; //0.1 rad per tau_A
 	params[ PT_CURVATURE ]   = 0.316f;//g_eff 0.3
 	params[ PT_QUENCH ]      = 0.0f;
-	params[ PT_BOUNDARY ]    = static_cast< float >( Boundary::Wall );
+	params[ PT_BOUNDARY ]    = static_cast< float >( Boundary::Open );
 
 	params[ PT_SPEED ]       = ParamFromSpeed( 0.3f );
 	params[ PT_RESISTIVITY ] = 0.0f;
@@ -217,6 +237,13 @@ ContainmentPlugin::ContainmentPlugin()
 	//-------------------------------------------------------------------
 	// Declaration. Every numeric parameter is 0..1; Controls.cpp maps them.
 	//-------------------------------------------------------------------
+	{
+		SetOptionParamInfo( PT_PRESET, "Preset", presets::kCount + 1, 0.0f );
+		SetParamElementInfo( PT_PRESET, 0, "Custom", 0.0f );
+		for( int i = 0; i < presets::kCount; ++i )
+			SetParamElementInfo( PT_PRESET, static_cast< unsigned int >( i + 1 ), presets::kPresets[ i ].name,
+			                     static_cast< float >( i + 1 ) );
+	}
 	SetParamInfo( PT_IGNITE, "Ignite", FF_TYPE_EVENT, false );
 	SetParamInfof( PT_BALL_SIZE, "Ball Size", FF_TYPE_STANDARD );
 	SetParamInfof( PT_BALL_X, "Ball X", FF_TYPE_XPOS );
@@ -228,6 +255,7 @@ ContainmentPlugin::ContainmentPlugin()
 	SetParamInfo( PT_PELLET, "Pellet", FF_TYPE_EVENT, false );
 	SetParamInfof( PT_FEED, "Feed", FF_TYPE_STANDARD );
 	SetParamInfof( PT_CLIP_HEATS, "Clip Heats", FF_TYPE_STANDARD );
+	SetParamInfof( PT_FUEL, "Fuel", FF_TYPE_STANDARD );
 
 	SetParamInfof( PT_FIELD, "Field", FF_TYPE_STANDARD );
 	SetParamInfof( PT_GUIDE_FIELD, "Guide Field", FF_TYPE_STANDARD );
@@ -273,7 +301,8 @@ ContainmentPlugin::ContainmentPlugin()
 	SetParamInfof( PT_MIX, "Mix", FF_TYPE_STANDARD );
 
 	//Groups: SetParamGroup collapses runs of consecutive same-group ids.
-	for( unsigned int id = PT_IGNITE; id <= PT_CLIP_HEATS; ++id )
+	SetParamGroup( PT_PRESET, "Preset" );
+	for( unsigned int id = PT_IGNITE; id <= PT_FUEL; ++id )
 		SetParamGroup( id, "Ball" );
 	for( unsigned int id = PT_FIELD; id <= PT_BOUNDARY; ++id )
 		SetParamGroup( id, "Bottle" );
@@ -336,26 +365,27 @@ FFResult ContainmentPlugin::InitGL( const FFGLViewportStruct* vp )
 ContainmentPlugin::Model ContainmentPlugin::CurrentModel() const
 {
 	Model m;
-	m.field     = FieldFromParam( params[ PT_FIELD ] );
-	m.guide     = GuideFieldFromParam( params[ PT_GUIDE_FIELD ] ) * m.field;
-	m.poles     = kPoleCounts[ optionIndex( params[ PT_POLES ], kPoleOptions ) ];
-	m.spin      = CoilSpinFromParam( params[ PT_COIL_SPIN ] );
-	m.curvature = CurvatureFromParam( params[ PT_CURVATURE ] );
+	m.field     = FieldFromParam( P( PT_FIELD ) );
+	m.guide     = GuideFieldFromParam( P( PT_GUIDE_FIELD ) ) * m.field;
+	m.poles     = kPoleCounts[ optionIndex( P( PT_POLES ), kPoleOptions ) ];
+	m.spin      = CoilSpinFromParam( P( PT_COIL_SPIN ) );
+	m.curvature = CurvatureFromParam( P( PT_CURVATURE ) );
 	m.boundary  = test.boundary >= 0 ? test.boundary
-	                                 : optionIndex( params[ PT_BOUNDARY ], static_cast< int >( Boundary::Count ) );
-	m.eta        = ResistivityFromParam( params[ PT_RESISTIVITY ] );
-	m.cooling    = CoolingFromParam( params[ PT_COOLING ] );
-	m.drive      = DriveFromParam( params[ PT_DRIVE ] );
-	m.driveScale = DriveScaleFromParam( params[ PT_DRIVE_SCALE ] );
+	                                 : optionIndex( P( PT_BOUNDARY ), static_cast< int >( Boundary::Count ) );
+	m.eta        = ResistivityFromParam( P( PT_RESISTIVITY ) );
+	m.cooling    = CoolingFromParam( P( PT_COOLING ) );
+	m.drive      = DriveFromParam( P( PT_DRIVE ) );
+	m.driveScale = DriveScaleFromParam( P( PT_DRIVE_SCALE ) );
 
 	//The coils never sit inside the frame.
 	const double halfDiagonal = 0.5 * std::sqrt( grid.lx * grid.lx + grid.ly * grid.ly );
-	m.coilRadius = std::max( static_cast< double >( CoilRadiusFromParam( params[ PT_COIL_RADIUS ] ) ), 1.05 * halfDiagonal );
+	m.coilRadius = std::max( static_cast< double >( CoilRadiusFromParam( P( PT_COIL_RADIUS ) ) ), 1.05 * halfDiagonal );
 
-	m.ballX      = std::clamp( params[ PT_BALL_X ], 0.0f, 1.0f ) * grid.lx;
-	m.ballY      = std::clamp( params[ PT_BALL_Y ], 0.0f, 1.0f ) * grid.ly;
-	m.ballRadius = BallSizeFromParam( params[ PT_BALL_SIZE ] );
-	m.pressure   = 0.5 * TemperatureFromParam( params[ PT_TEMPERATURE ] );
+	//Ball X / Y are fractions of the FRAME, which starts at the margin.
+	m.ballX      = ( grid.ox + std::clamp( P( PT_BALL_X ), 0.0f, 1.0f ) * grid.fx ) * grid.dx;
+	m.ballY      = ( grid.oy + std::clamp( P( PT_BALL_Y ), 0.0f, 1.0f ) * grid.fy ) * grid.dx;
+	m.ballRadius = BallSizeFromParam( P( PT_BALL_SIZE ) );
+	m.pressure   = 0.5 * TemperatureFromParam( P( PT_TEMPERATURE ) );
 	return m;
 }
 
@@ -398,8 +428,9 @@ bool ContainmentPlugin::EnsureBuffers( int width, int height, const Grid& wanted
 		ok = ok && b.Ensure( 2, 1, GL_RGBA32F, PassBuffer::Sampling::Nearest );
 
 	//The light, on the grid; the glow on a copy reduced to <= kGlowCells.
-	ok = ok && emission.Ensure( wanted.nx, wanted.ny, GL_RGBA32F, PassBuffer::Sampling::Linear );
-	int gw = wanted.nx, gh = wanted.ny, reductions = 0;
+	//The light is the frame's, not the margin's.
+	ok = ok && emission.Ensure( wanted.fx, wanted.fy, GL_RGBA32F, PassBuffer::Sampling::Linear );
+	int gw = wanted.fx, gh = wanted.fy, reductions = 0;
 	while( std::min( gw, gh ) > kGlowCells && gw % 2 == 0 && gh % 2 == 0 )
 	{
 		gw /= 2;
@@ -414,7 +445,7 @@ bool ContainmentPlugin::EnsureBuffers( int width, int height, const Grid& wanted
 		glowReduce.resize( static_cast< size_t >( reductions ) );
 	}
 	{
-		int w = wanted.nx, h = wanted.ny;
+		int w = wanted.fx, h = wanted.fy;
 		for( PassBuffer& b : glowReduce )
 		{
 			w /= 2;
@@ -475,6 +506,8 @@ void ContainmentPlugin::SetStateUniforms( GLuint p ) const
 {
 	uniform2i( p, "GridSize", grid.nx, grid.ny );
 	uniform1f( p, "Dx", static_cast< float >( grid.dx ) );
+	uniform2i( p, "FrameOrigin", grid.ox, grid.oy );
+	uniform2i( p, "FrameCells", grid.fx, grid.fy );
 	uniform1f( p, "Gamma", test.gamma );
 	const Model m = CurrentModel();
 	uniform1i( p, "BoundaryMode", m.boundary );
@@ -541,9 +574,9 @@ void ContainmentPlugin::Ignite( GLuint input, float maxU, float maxV )
 	uniform2f( p, "MaxUV", maxU, maxV );
 	uniform2f( p, "BallCentre", static_cast< float >( m.ballX ), static_cast< float >( m.ballY ) );
 	uniform1f( p, "BallRadius", static_cast< float >( m.ballRadius ) );
-	uniform1i( p, "ProfileKind", optionIndex( params[ PT_PROFILE ], static_cast< int >( Profile::Count ) ) );
+	uniform1i( p, "ProfileKind", optionIndex( P( PT_PROFILE ), static_cast< int >( Profile::Count ) ) );
 	uniform1f( p, "BallPressure", static_cast< float >( m.pressure ) );
-	uniform1f( p, "ClipHeats", ClipHeatsFromParam( params[ PT_CLIP_HEATS ] ) );
+	uniform1f( p, "ClipHeats", ClipHeatsFromParam( P( PT_CLIP_HEATS ) ) );
 	uniform1f( p, "BgDensity", test.backgroundDensity );
 	uniform1f( p, "BgPressure", test.backgroundPressure );
 	{
@@ -561,15 +594,17 @@ void ContainmentPlugin::Sources( GLuint input, float maxU, float maxV, double ho
                                  bool always )
 {
 	const Model m  = CurrentModel();
-	const float feed = FeedFromParam( params[ PT_FEED ] );
+	const float feed = FeedFromParam( P( PT_FEED ) );
 	//Feed is the fraction per frame at 60 fps; frame-rate independent.
 	const float fraction = 1.0f - static_cast< float >( std::pow( 1.0 - std::min( feed, 0.999f ), hostDt * 60.0 ) );
 	//Heating, in p0 per tau_A: the clip's light through Feed, and the audio.
-	const float clipHeat  = static_cast< float >( 2.0 * ClipHeatsFromParam( params[ PT_CLIP_HEATS ] ) * feed
+	const float clipHeat  = static_cast< float >( 2.0 * ClipHeatsFromParam( P( PT_CLIP_HEATS ) ) * feed
                                                  * m.pressure * simDt );
-	const float audioHeat = static_cast< float >( AudioHeatFromParam( params[ PT_AUDIO_HEAT ] ) * analyser.Level()
+	const float audioHeat = static_cast< float >( AudioHeatFromParam( P( PT_AUDIO_HEAT ) ) * analyser.Level()
 	                                              * m.pressure * simDt );
-	if( fraction <= 0.0f && clipHeat <= 0.0f && audioHeat <= 0.0f && pellets == 0 && !always && !carryCoils )
+	const float fuel = static_cast< float >( 1.0 - std::exp( -FuelFromParam( P( PT_FUEL ) ) * simDt ) );
+	if( fraction <= 0.0f && clipHeat <= 0.0f && audioHeat <= 0.0f && pellets == 0 && fuel <= 0.0f && !always
+	    && !carryCoils )
 		return;
 
 	const GLuint p = Id( Program::Sources );
@@ -581,6 +616,13 @@ void ContainmentPlugin::Sources( GLuint input, float maxU, float maxV, double ho
 	uniform1f( p, "ClipHeatRate", clipHeat );
 	uniform1f( p, "AudioHeatRate", audioHeat );
 	uniform1i( p, "PelletCount", pellets );
+	uniform1f( p, "FuelFraction", always ? 0.0f : fuel );
+	uniform2f( p, "BallCentre", static_cast< float >( m.ballX ), static_cast< float >( m.ballY ) );
+	uniform1f( p, "BallRadius", static_cast< float >( m.ballRadius ) );
+	uniform1i( p, "ProfileKind", optionIndex( P( PT_PROFILE ), static_cast< int >( Profile::Count ) ) );
+	uniform1f( p, "BallPressure", static_cast< float >( m.pressure ) );
+	uniform1f( p, "BgDensity", test.backgroundDensity );
+	uniform1f( p, "BgPressure", test.backgroundPressure );
 	uniform2f( p, "PelletCentre", static_cast< float >( m.ballX ), static_cast< float >( m.ballY ) );
 	uniform1f( p, "PelletDensity", kPelletDensity );
 	uniform1f( p, "PelletRadius", kPelletRadius );
@@ -698,6 +740,10 @@ void ContainmentPlugin::Substep()
 		uniform1f( p, "GLMAlpha", kGLMAlpha );
 		uniform1i( p, "UseEntropy", test.entropy ? 1 : 0 );
 		uniform1f( p, "EntropySwitch", kEntropySwitch );
+		static const float efolds = std::getenv( "CT_EF" ) ? std::atof( std::getenv( "CT_EF" ) ) : kSpongeEFolds;
+		static const float power  = std::getenv( "CT_PW" ) ? std::atof( std::getenv( "CT_PW" ) ) : 2.0f;
+		uniform1f( p, "SpongeEFolds", grid.ox > 0 ? efolds : 0.0f );
+		uniform1f( p, "SpongePower", power );
 		BoundTextures bound( { s.Texture( 0 ), s.Texture( 1 ), s.Texture( 2 ), s.Texture( 3 ), star.Texture( 0 ),
 		                       star.Texture( 1 ), clock[ clockIndex ].TextureID(), fluxX.Texture( 0 ), fluxX.Texture( 1 ),
 		                       fluxX.Texture( 2 ), fluxX.Texture( 3 ), fluxY.Texture( 0 ), fluxY.Texture( 1 ),
@@ -819,7 +865,7 @@ void ContainmentPlugin::LoadStateForTest( const std::vector< float >& a, const s
 	//The loaded state carries no signal speeds; a sources pass that adds
 	//nothing writes them. (Its clip reads are of the state's own texture,
 	//harmlessly: nothing is fed.)
-	const float feed = params[ PT_FEED ];
+	const float feed = P( PT_FEED );
 	params[ PT_FEED ] = 0.0f;
 	Sources( state[ current ].Texture( 0 ), 1.0f, 1.0f, 0.0, 0.0, 0, true );
 	params[ PT_FEED ] = feed;
@@ -837,16 +883,16 @@ void ContainmentPlugin::Emission()
 	glUseProgram( p );
 	SetStateUniforms( p );
 	samplers( p, { "StateA", "StateB", "StateC", "StateD" } );
-	uniform1i( p, "View", optionIndex( params[ PT_VIEW ], static_cast< int >( View::Count ) ) );
-	uniform1f( p, "Tint", std::clamp( params[ PT_TINT ], 0.0f, 1.0f ) );
-	uniform1i( p, "RampKind", optionIndex( params[ PT_RAMP ], static_cast< int >( Ramp::Count ) ) );
+	uniform1i( p, "View", optionIndex( P( PT_VIEW ), static_cast< int >( View::Count ) ) );
+	uniform1f( p, "Tint", std::clamp( P( PT_TINT ), 0.0f, 1.0f ) );
+	uniform1i( p, "RampKind", optionIndex( P( PT_RAMP ), static_cast< int >( Ramp::Count ) ) );
 	uniform1f( p, "TempReference", static_cast< float >( CurrentModel().pressure ) );
 	uniform1f( p, "FieldReference", static_cast< float >( CurrentModel().field ) );
 	const StateBuffer& s = state[ current ];
 	{
 		BoundTextures bound( { s.Texture( 0 ), s.Texture( 1 ), s.Texture( 2 ), s.Texture( 3 ) } );
 		glBindFramebuffer( GL_FRAMEBUFFER, emission.GetGLID() );
-		glViewport( 0, 0, grid.nx, grid.ny );
+		glViewport( 0, 0, grid.fx, grid.fy );
 		quad.Draw();
 	}
 	glUseProgram( 0 );
@@ -854,7 +900,7 @@ void ContainmentPlugin::Emission()
 
 void ContainmentPlugin::Glow()
 {
-	glowFraction = GlowFromParam( params[ PT_GLOW ] );
+	glowFraction = GlowFromParam( P( PT_GLOW ) );
 	if( glowFraction <= 0.0f )
 		return;
 
@@ -884,7 +930,8 @@ void ContainmentPlugin::Glow()
 	std::vector< float > weights;
 	for( int stage = 0; stage < kGlowStages; ++stage )
 	{
-		const double sigma = kGlowSigma[ stage ] * glowHeight / grid.ly;
+		//The glow's copy spans the frame, whose height is 1.
+		const double sigma = kGlowSigma[ stage ] * glowHeight;
 		const double step  = std::sqrt( std::max( sigma * sigma - previous * previous, 1e-6 ) );
 		previous           = sigma;
 		const int taps     = gaussianWeights( step, weights );
@@ -1100,7 +1147,7 @@ FFResult ContainmentPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 			bins[ i ] = info->elements[ static_cast< size_t >( i ) ].value;
 	}
 	audio::Settings settings;
-	settings.sensitivity = std::clamp( params[ PT_AUDIO_PELLETS ], 0.0f, 1.0f );
+	settings.sensitivity = std::clamp( P( PT_AUDIO_PELLETS ), 0.0f, 1.0f );
 	analyser.Update( bins, binCount, static_cast< float >( hostDt ), settings );
 
 	//Last frame's clock, read now rather than then, so the GPU has had a
@@ -1132,8 +1179,15 @@ FFResult ContainmentPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 	//-------------------------------------------------------------------
 	// The grid, and every allocation, before anything binds a texture.
 	//-------------------------------------------------------------------
-	const int detail  = optionIndex( params[ PT_DETAIL ], kDetailCount );
-	const Grid wanted = ChooseGrid( width, height, kDetailCells[ detail ] );
+	const int detail  = optionIndex( P( PT_DETAIL ), kDetailCount );
+	//Open is a window onto a bigger bottle: a margin of simulated cells all
+	//round the frame, never shown, holding the absorbing layer.
+	const int boundaryNow = test.boundary >= 0 ? test.boundary
+	                                           : optionIndex( P( PT_BOUNDARY ), static_cast< int >( Boundary::Count ) );
+	const int margin  = boundaryNow == static_cast< int >( Boundary::Open ) && !test.legacyOpen
+	                        ? static_cast< int >( std::lround( ( std::getenv( "CT_MG" ) ? std::atof( std::getenv( "CT_MG" ) ) : kMarginFraction ) * kDetailCells[ detail ] ) )
+	                        : 0;
+	const Grid wanted = ChooseGrid( width, height, kDetailCells[ detail ], margin );
 	if( !EnsureBuffers( width, height, wanted ) )
 	{
 		diag::error( "could not allocate the plasma's buffers" );
@@ -1144,20 +1198,24 @@ FFResult ContainmentPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 	// The coils, as of this frame.
 	//-------------------------------------------------------------------
 	const Model m      = CurrentModel();
-	const double simDt = hostDt * SpeedFromParam( params[ PT_SPEED ] );//tau_A = 1
+	const double simDt = hostDt * SpeedFromParam( P( PT_SPEED ) );//tau_A = 1
 	spinAngle += m.spin * simDt;
 	spinAngle = std::remainder( spinAngle, 2.0 * kPi );
 	//The quench: the coils' current decays with kQuenchTime, and comes back
 	//the same way when Quench is let go.
-	const double wantStrength = params[ PT_QUENCH ] >= 0.5f ? 0.0 : 1.0;
+	const double wantStrength = P( PT_QUENCH ) >= 0.5f ? 0.0 : 1.0;
 	coilStrength += ( wantStrength - coilStrength ) * ( 1.0 - std::exp( -simDt / kQuenchTime ) );
 	previousCoils = coils;
 	coils = MakeCoils( m.poles, m.coilRadius, spinAngle, m.field, m.guide, coilStrength, 0.5 * grid.lx, 0.5 * grid.ly );
 	//With a conducting vessel the coils' change is carried through it (the
 	//sources pass). Any change: a turn, a quench, a new Field or Coil Radius
 	//-- but not a new pole count, whose coils are not the same coils.
-	carryCoils = m.boundary == static_cast< int >( Boundary::Wall ) && previousCoils.count == coils.count
-	             && !ignitePending && grid.nx > 0;
+	//Carried through the volume for Open as well: imposing the turn only at
+	//the edges left the interior lagging and piled the mismatch up as current
+	//sheets where the edges face the coils, which flung the plasma (|v| 18 at
+	//4.5 tau_A on the default look).
+	carryCoils = ( m.boundary == static_cast< int >( Boundary::Wall ) || m.boundary == static_cast< int >( Boundary::Open ) )
+	             && previousCoils.count == coils.count && !ignitePending && grid.nx > 0;
 	drive.Advance( simDt, m.driveScale, m.drive );
 
 	const FFGLTexCoords maxCoords = GetMaxGLTexCoords( source );
@@ -1174,7 +1232,7 @@ FFResult ContainmentPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 	}
 	int pellets   = pelletPresses;
 	pelletPresses = 0;
-	if( params[ PT_AUDIO_PELLETS ] > 0.0f && analyser.Fired() )
+	if( P( PT_AUDIO_PELLETS ) > 0.0f && analyser.Fired() )
 		++pellets;
 	Sources( source.Handle, maxCoords.s, maxCoords.t, hostDt, simDt, pellets );
 	if( pellets > 0 )
@@ -1187,10 +1245,10 @@ FFResult ContainmentPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 	// The light.
 	//-------------------------------------------------------------------
 	Emission();
-	const int view = optionIndex( params[ PT_VIEW ], static_cast< int >( View::Count ) );
+	const int view = optionIndex( P( PT_VIEW ), static_cast< int >( View::Count ) );
 	if( view == 0 )
 		Glow();
-	const float lines   = std::clamp( params[ PT_FIELD_LINES ], 0.0f, 1.0f );
+	const float lines   = std::clamp( P( PT_FIELD_LINES ), 0.0f, 1.0f );
 	float lineSpacing   = 0.0f;
 	if( view == 0 && lines > 0.0f && coils.count > 0 )
 	{
@@ -1208,7 +1266,7 @@ FFResult ContainmentPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 			const double a = 2.0 * kPi * k / 360.0;
 			span = std::max( span, std::abs( VacuumPotential( coils, cx + 0.5 * std::cos( a ), cy + 0.5 * std::sin( a ) ) - centre ) );
 		}
-		lineSpacing = static_cast< float >( span / LineCountFromParam( params[ PT_LINE_COUNT ] ) );
+		lineSpacing = static_cast< float >( span / LineCountFromParam( P( PT_LINE_COUNT ) ) );
 	}
 
 	//-------------------------------------------------------------------
@@ -1226,7 +1284,7 @@ FFResult ContainmentPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 		                   && hostViewport[ 1 ] == 0;
 		uniform1i( p, "ExactInput", exact ? 1 : 0 );
 		uniform1i( p, "View", view );
-		const double ev = ExposureFromParam( params[ PT_EXPOSURE ] );
+		const double ev = ExposureFromParam( P( PT_EXPOSURE ) );
 		uniform1f( p, "Gain", static_cast< float >( std::pow( 2.0, ev ) / kEmissionReference ) );
 		const float glowAmount = view == 0 ? glowFraction : 0.0f;
 		uniform1f( p, "GlowAmount", glowAmount );
@@ -1236,7 +1294,11 @@ FFResult ContainmentPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 		uniform3f( p, "GlowShare", kGlowShare[ 0 ], kGlowShare[ 1 ], kGlowShare[ 2 ] );
 		uniform1f( p, "LineAmount", lines );
 		uniform1f( p, "LineSpacing", lineSpacing );
-		uniform1f( p, "MixAmount", std::clamp( params[ PT_MIX ], 0.0f, 1.0f ) );
+		//The potential covers the margin; the frame's uv maps into it.
+		glUniform4f( location( p, "PotentialMap" ), static_cast< float >( grid.fx ) / grid.nx,
+		             static_cast< float >( grid.fy ) / grid.ny, static_cast< float >( grid.ox ) / grid.nx,
+		             static_cast< float >( grid.oy ) / grid.ny );
+		uniform1f( p, "MixAmount", std::clamp( P( PT_MIX ), 0.0f, 1.0f ) );
 		const GLuint potential = havePotential ? PotentialTextureID() : emission.TextureID();
 		BoundTextures bound( { source.Handle, emission.TextureID(), glow[ 0 ].TextureID(), glow[ 1 ].TextureID(),
 		                       glow[ 2 ].TextureID(), potential } );
@@ -1327,6 +1389,12 @@ FFResult ContainmentPlugin::SetFloatParameter( unsigned int index, float value )
 		if( down && !igniteHeld )
 			ignitePending = true;
 		igniteHeld = down;
+	}
+	else if( index == PT_PRESET )
+	{
+		//A new bottle wants a fresh ball.
+		if( std::lround( value ) != std::lround( params[ PT_PRESET ] ) )
+			ignitePending = true;
 	}
 	else if( index == PT_PELLET )
 	{

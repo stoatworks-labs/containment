@@ -39,8 +39,13 @@ namespace containment
 */
 enum ParamId : unsigned int
 {
+	// -- Preset -------------------------------------------------------------
+	// Element 0 is Custom; any other lays a row of Presets.h over the
+	// operator's values at read time (the fleet's override model).
+	PT_PRESET = 0,
+
 	// -- Ball ---------------------------------------------------------------
-	PT_IGNITE = 0,
+	PT_IGNITE,
 	PT_BALL_SIZE,
 	PT_BALL_X,
 	PT_BALL_Y,
@@ -49,6 +54,7 @@ enum ParamId : unsigned int
 	PT_PELLET,
 	PT_FEED,
 	PT_CLIP_HEATS,
+	PT_FUEL,
 
 	// -- Bottle -------------------------------------------------------------
 	PT_FIELD,
@@ -165,6 +171,13 @@ constexpr float kCourant = 0.8f;
 /// -- never unstable. Logged through Diag when it bites.
 constexpr int kMaxSubsteps = 48;
 
+/// Open's margin: simulated cells all round the frame, as a fraction of the
+/// frame height, holding the absorbing layer. Never shown.
+constexpr float kMarginFraction = 0.1f;
+
+/// The absorbing layer: e-foldings the fastest wave loses crossing it once.
+constexpr float kSpongeEFolds = 6.0f;
+
 /// The dual-energy switch: where the pressure the total energy gives is less
 /// than this fraction of the kinetic plus magnetic energy, the pressure comes
 /// from the entropy carried alongside instead. See the update pass.
@@ -211,6 +224,12 @@ float FeedFromParam( float value );
 /// Clip Heats: 0 to 1, linearly. At 1 the brightest pixel starts at twice the
 /// ball's pressure and the darkest at none.
 float ClipHeatsFromParam( float value );
+
+/// Fuel: a steady gas puff that tops the ball's footprint back up towards its
+/// ignition profile, at this rate per tau_A: 0 to 2, linearly. It only adds
+/// (mass at rest, heat), never removes, so it holds a leaking ball up rather
+/// than pinning it. At 0 the bottle runs down.
+float FuelFromParam( float value );
 
 /// The bottle's field in units of B_ref: 0.25 to 4, geometrically. For a
 /// cusp it is |B| at radius 0.5 (the rim of the frame's inscribed circle).
