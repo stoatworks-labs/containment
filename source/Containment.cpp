@@ -568,7 +568,7 @@ void ContainmentPlugin::Sources( GLuint input, float maxU, float maxV, double ho
                                                  * m.pressure * simDt );
 	const float audioHeat = static_cast< float >( AudioHeatFromParam( params[ PT_AUDIO_HEAT ] ) * analyser.Level()
 	                                              * m.pressure * simDt );
-	if( fraction <= 0.0f && clipHeat <= 0.0f && audioHeat <= 0.0f && pellets == 0 && !always )
+	if( fraction <= 0.0f && clipHeat <= 0.0f && audioHeat <= 0.0f && pellets == 0 && !always && !carryCoils )
 		return;
 
 	const GLuint p = Id( Program::Sources );
@@ -583,6 +583,17 @@ void ContainmentPlugin::Sources( GLuint input, float maxU, float maxV, double ho
 	uniform2f( p, "PelletCentre", static_cast< float >( m.ballX ), static_cast< float >( m.ballY ) );
 	uniform1f( p, "PelletDensity", kPelletDensity );
 	uniform1f( p, "PelletRadius", kPelletRadius );
+	float data[ kMaxCoils * 3 ] = {};
+	for( int k = 0; k < previousCoils.count; ++k )
+	{
+		data[ k * 3 + 0 ] = static_cast< float >( previousCoils.x[ k ] );
+		data[ k * 3 + 1 ] = static_cast< float >( previousCoils.y[ k ] );
+		data[ k * 3 + 2 ] = static_cast< float >( previousCoils.current[ k ] );
+	}
+	uniform1i( p, "CarryCoils", carryCoils && !always ? 1 : 0 );
+	uniform1i( p, "PrevCoilCount", previousCoils.count );
+	glUniform3fv( location( p, "PrevCoilData" ), kMaxCoils, data );
+	uniform1f( p, "PrevGuideBz", static_cast< float >( previousCoils.guide ) );
 	{
 		const StateBuffer& s = state[ current ];
 		BoundTextures bound( { s.Texture( 0 ), s.Texture( 1 ), s.Texture( 2 ), s.Texture( 3 ), input } );
@@ -1127,7 +1138,13 @@ FFResult ContainmentPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 	//the same way when Quench is let go.
 	const double wantStrength = params[ PT_QUENCH ] >= 0.5f ? 0.0 : 1.0;
 	coilStrength += ( wantStrength - coilStrength ) * ( 1.0 - std::exp( -simDt / kQuenchTime ) );
+	previousCoils = coils;
 	coils = MakeCoils( m.poles, m.coilRadius, spinAngle, m.field, m.guide, coilStrength, 0.5 * grid.lx, 0.5 * grid.ly );
+	//With a conducting vessel the coils' change is carried through it (the
+	//sources pass). Any change: a turn, a quench, a new Field or Coil Radius
+	//-- but not a new pole count, whose coils are not the same coils.
+	carryCoils = m.boundary == static_cast< int >( Boundary::Wall ) && previousCoils.count == coils.count
+	             && !ignitePending && grid.nx > 0;
 	drive.Advance( simDt, m.driveScale, m.drive );
 
 	const FFGLTexCoords maxCoords = GetMaxGLTexCoords( source );

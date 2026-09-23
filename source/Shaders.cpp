@@ -1046,6 +1046,17 @@ uniform int PelletCount;    //pellets landing this frame
 uniform vec2 PelletCentre;
 uniform float PelletDensity;
 uniform float PelletRadius;
+//The coils as they were last frame. With a conducting vessel (Wall) their
+//slow changes -- a turn, a quench -- are carried straight through the vessel
+//and the plasma: B += B_vac( now ) - B_vac( then ), which is curl-free and
+//divergence-free, so it adds no current and no monopole, and the plasma has
+//to follow the field it finds itself in. (Driving the change through the
+//wall's faces instead needs E_z = -dA/dt at a no-slip, line-tied wall, where
+//ideal MHD cannot carry it: it made a current sheet and a runaway.)
+uniform int CarryCoils;
+uniform int PrevCoilCount;
+uniform vec3 PrevCoilData[ 12 ];
+uniform float PrevGuideBz;
 
 layout( location = 0 ) out vec4 outA;
 layout( location = 1 ) out vec4 outB;
@@ -1066,6 +1077,17 @@ void main()
 	vec4 clip = clamp( texture( InputTexture, uv * MaxUV ), 0.0, 1.0 );
 	float chi = clamp( w.q3.a, 0.0, 1.0 );
 	float luma = dot( clip.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
+
+	if( CarryCoils == 1 )
+	{
+		vec2 then = vec2( 0.0 );
+		for( int k = 0; k < PrevCoilCount; ++k )
+		{
+			vec2 d = x - PrevCoilData[ k ].xy;
+			then += PrevCoilData[ k ].z * vec2( -d.y, d.x ) / dot( d, d );
+		}
+		w.q1.yzw += vacuumField( x ) - vec3( then, PrevGuideBz );
+	}
 
 	//Feed: inside the ball's footprint the picture relaxes towards the clip.
 	w.q3.rgb += FeedFraction * chi * ( clip.rgb - w.q3.rgb );

@@ -230,6 +230,8 @@ private:
 	bool havePotential = false;
 
 	Coils coils;
+	Coils previousCoils;///< as of the last frame: the wall is driven by the change
+	bool carryCoils = false;///< this frame's change of the coils is carried through the vessel (Wall)
 	Drive drive;
 	double spinAngle     = 0.0;
 	double coilStrength  = 1.0;
