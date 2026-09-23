@@ -522,30 +522,52 @@ void unrotate( Flux F, int dir, out vec4 fA, out vec4 fB )
 // The body forces, shared by the predictor and the update.
 //---------------------------------------------------------------------------
 const char* const kForces = R"(
-uniform float Curvature;     //g_eff, pointing away from GravityCentre
+uniform float Curvature;     //g_eff at the reference temperature, pointing away from GravityCentre
+uniform float CurvatureTemp; //the reference temperature; <= 0: g_eff uniform (the harness's RT slab)
 uniform vec2 GravityCentre;  //frame heights: the ball's centre
 uniform float GravityCore;   //the radius inside which g_eff tapers to 0
 uniform int DriveCount;
 uniform vec4 DriveModes[ 12 ];//( kx, ky, a, b ): phi += a cos( k.x ) + b sin( k.x )
+uniform float DriveWindow;   //the stirring's reach about the ball, frame heights
 
-vec2 bodyForce( vec2 x )
+vec2 bodyForce( vec2 x, float T )
 {
 	vec2 d  = x - GravityCentre;
 	float r = length( d );
-	//Radial, of magnitude Curvature, smoothed through the centre where the
-	//direction is undefined: g r / sqrt( r^2 + core^2 ).
-	vec2 g = Curvature * d / sqrt( r * r + GravityCore * GravityCore );
+	//The curvature drift of a real bottle's bad-curvature region goes as
+	//T / R_c, so the effective gravity is proportional to the temperature:
+	//g_eff = Curvature T / T_ref. Its force density is then Curvature p /
+	//T_ref -- continuous across an isobaric interface, and jumping where the
+	//pressure does, at the ball's edge, which is where interchange is driven.
+	//A uniform g_eff (the first version) also pulled the cold background
+	//outwards, stratified it by e^( g L / T_bg ) ~ 70 across the frame and
+	//emptied the space round the ball. Radial, smoothed through the centre
+	//where the direction is undefined: r / sqrt( r^2 + core^2 ).
+	float scale = CurvatureTemp > 0.0 ? T / CurvatureTemp : 1.0;
+	vec2 g = Curvature * scale * d / sqrt( r * r + GravityCore * GravityCore );
 
-	//The stirring force, curl( phi z ) = ( d phi / dy, -d phi / dx ):
-	//divergence-free by construction.
-	for( int m = 0; m < DriveCount; ++m )
+	//The stirring force, curl( phi W z ) = ( d( phi W ) / dy, -d( phi W ) / dx ):
+	//divergence-free by construction, however phi and W are chosen. W is a
+	//Gaussian window about the ball, so the stirring keeps the ball alive
+	//without churning the tenuous background (which, stirred, opened
+	//rarefied pockets whose Alfven speed set the whole frame's time step).
+	if( DriveCount > 0 )
 	{
-		vec4 mode = DriveModes[ m ];
-		float ph  = dot( mode.xy, x );
-		float s   = sin( ph );
-		float c   = cos( ph );
-		float dphi = -mode.z * s + mode.w * c;//d phi / d( k.x )
-		g += dphi * vec2( mode.y, -mode.x );
+		float W   = exp( -0.5 * dot( d, d ) / ( DriveWindow * DriveWindow ) );
+		vec2 gradW = -W * d / ( DriveWindow * DriveWindow );
+		float phi = 0.0;
+		vec2 gradPhi = vec2( 0.0 );
+		for( int m = 0; m < DriveCount; ++m )
+		{
+			vec4 mode = DriveModes[ m ];
+			float ph  = dot( mode.xy, x );
+			float s   = sin( ph );
+			float c   = cos( ph );
+			phi += mode.z * c + mode.w * s;
+			gradPhi += ( -mode.z * s + mode.w * c ) * mode.xy;
+		}
+		vec2 grad = W * gradPhi + phi * gradW;
+		g += vec2( grad.y, -grad.x );
 	}
 	return g;
 }
@@ -700,7 +722,7 @@ void main()
 	D -= k * ( ( fR.c - fL.c ) + ( fT.c - fB.c ) );
 
 	//The body force, a half step.
-	vec2 g = bodyForce( cellCentre( cell ) );
+	vec2 g = bodyForce( cellCentre( cell ), c.q1.x / c.q0.x );
 	A.yz += 0.5 * dt * c.q0.x * g;
 	B.x  += 0.5 * dt * c.q0.x * dot( c.q0.yz, g );
 
@@ -818,6 +840,7 @@ uniform sampler2D StateB;
 uniform sampler2D StateC;
 uniform sampler2D StateD;
 uniform sampler2D StarA;
+uniform sampler2D StarB;
 uniform sampler2D ClockTexture;
 uniform sampler2D FluxXA;
 uniform sampler2D FluxXB;
@@ -878,12 +901,10 @@ void main()
 	C.z -= k * ( ( cxr.y - cxl.y ) + ( cyt.y - cyb.y ) );
 
 	//The half-step state, for the sources.
-	vec4 sA = texelFetch( StarA, cell, 0 );
-	Q c;
-	c.q0 = vec4( sA.x, sA.yzw / sA.x );
+	Q c = toPrim( texelFetch( StarA, cell, 0 ), texelFetch( StarB, cell, 0 ), vec4( 0.0 ), vec4( 0.0 ) );
 
 	//The body force at the half step (midpoint rule).
-	vec2 g = bodyForce( cellCentre( cell ) );
+	vec2 g = bodyForce( cellCentre( cell ), c.q1.x / c.q0.x );
 	A.yz += dt * c.q0.x * g;
 	B.x  += dt * dot( c.q0.x * c.q0.yz, g );
 

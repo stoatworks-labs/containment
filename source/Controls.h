@@ -184,6 +184,10 @@ constexpr float kQuenchTime = 0.15f;
 /// The stirring force's correlation time, in tau_A, and its mode count.
 constexpr float kDriveTime  = 0.6f;
 constexpr int kDriveModes   = 12;
+/// The stirring's reach: a Gaussian window of this many ball radii about the
+/// ball's centre (the stream function is windowed, so the force stays
+/// divergence-free).
+constexpr float kDriveWindow = 1.5f;
 
 /// Emission rho^2 sqrt(T) at the reference ball (rho 1, T 1/4), which
 /// Exposure 0 EV maps to 1.
@@ -222,7 +226,9 @@ float CoilRadiusFromParam( float value );
 /// Coil rotation rate, radians per tau_A: -1 to 1, linearly, 0 at the middle.
 float CoilSpinFromParam( float value );
 
-/// Effective gravity g_eff, B_ref^2 / ( rho0 L ): 0 to 3, quadratically.
+/// Effective gravity g_eff at the ball's own temperature, B_ref^2 / ( rho0 L ):
+/// 0 to 3, quadratically. Elsewhere it scales as T / T_ball (the curvature
+/// drift goes as T / R_c), so its force density is Curvature p / T_ball.
 float CurvatureFromParam( float value );
 
 /// Speed: Alfven crossing times per second of host time. 0.02 to 2,

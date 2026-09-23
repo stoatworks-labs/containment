@@ -35,6 +35,7 @@ struct TestModel
 	double gravityX     = 0.0;
 	double gravityY     = 0.0;
 	double gravityCore  = -1.0; ///< < 0: the shipped taper
+	bool uniformGravity = false;///< g_eff not scaled by T / T_ref (the textbook RT slab)
 	bool additiveGlow   = false;///< the glare ADDED rather than moved (the wrong model)
 	float backgroundDensity  = kBackgroundDensity;
 	float backgroundPressure = kBackgroundPressure;

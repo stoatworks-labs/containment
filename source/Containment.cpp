@@ -167,30 +167,32 @@ ContainmentPlugin::ContainmentPlugin()
 	SetTimeSupported( true );
 
 	//-------------------------------------------------------------------
-	// Defaults: a ball in a six-pole cusp with a little guide field, the
-	// coils turning slowly, the curvature and the stirring set just past
-	// where the edge stays smooth -- so dropping the effect on a layer shows
-	// a live, writhing plasma straight away. The clip keeps its own colours
-	// (Temperature Tint 0); docs/green-orb.preset is the green look.
+	// Defaults: a ball held mostly by the guide field and shaped by a weak
+	// six-pole cusp, in a conducting vessel (Wall: the field the ball
+	// compresses stays in the frame rather than leaking out of the nearest
+	// edge), the coils turning slowly, the curvature and the stirring set
+	// just past where the edge stays smooth -- so dropping the effect on a
+	// layer shows a live, writhing plasma straight away. The clip keeps its
+	// own colours (Temperature Tint 0); docs/green-orb.preset is the green look.
 	//-------------------------------------------------------------------
 	params[ PT_IGNITE ]      = 0.0f;
 	params[ PT_BALL_SIZE ]   = 0.389f;//0.18 frame heights
 	params[ PT_BALL_X ]      = 0.5f;
 	params[ PT_BALL_Y ]      = 0.5f;
-	params[ PT_TEMPERATURE ] = 0.3705f;//beta0 = 1
+	params[ PT_TEMPERATURE ] = 0.315f;//beta0 = 0.7
 	params[ PT_PROFILE ]     = static_cast< float >( Profile::Gaussian );
 	params[ PT_PELLET ]      = 0.0f;
 	params[ PT_FEED ]        = 0.1f;
 	params[ PT_CLIP_HEATS ]  = 0.0f;
 
-	params[ PT_FIELD ]       = 0.5f;  //1 B_ref at the rim
-	params[ PT_GUIDE_FIELD ] = 0.15f; //Bz = 0.3 Field
+	params[ PT_FIELD ]       = 0.25f; //0.5 B_ref at the rim
+	params[ PT_GUIDE_FIELD ] = 0.7f;  //Bz = 1.4 Field: the guide field holds the ball, the cusp shapes it
 	params[ PT_POLES ]       = 2.0f;  //six
 	params[ PT_COIL_RADIUS ] = 0.105f;//1.3 frame heights
 	params[ PT_COIL_SPIN ]   = 0.55f; //0.1 rad per tau_A
 	params[ PT_CURVATURE ]   = 0.316f;//g_eff 0.3
 	params[ PT_QUENCH ]      = 0.0f;
-	params[ PT_BOUNDARY ]    = static_cast< float >( Boundary::Open );
+	params[ PT_BOUNDARY ]    = static_cast< float >( Boundary::Wall );
 
 	params[ PT_SPEED ]       = ParamFromSpeed( 0.3f );
 	params[ PT_RESISTIVITY ] = 0.0f;
@@ -495,6 +497,8 @@ void ContainmentPlugin::SetStateUniforms( GLuint p ) const
 	uniform1f( p, "GuideBz", static_cast< float >( coils.guide ) );
 
 	uniform1f( p, "Curvature", static_cast< float >( m.curvature ) );
+	//The reference temperature: the ball's as ignited, p0 / rho0.
+	uniform1f( p, "CurvatureTemp", test.uniformGravity ? 0.0f : static_cast< float >( m.pressure ) );
 	if( test.gravityCentre )
 		uniform2f( p, "GravityCentre", static_cast< float >( test.gravityX ), static_cast< float >( test.gravityY ) );
 	else
@@ -514,6 +518,7 @@ void ContainmentPlugin::SetStateUniforms( GLuint p ) const
 			++count;
 		}
 	uniform1i( p, "DriveCount", count );
+	uniform1f( p, "DriveWindow", static_cast< float >( kDriveWindow * m.ballRadius ) );
 	glUniform4fv( location( p, "DriveModes" ), kDriveModes, modes );
 }
 
@@ -674,15 +679,15 @@ void ContainmentPlugin::Substep()
 		const GLuint p = Id( Program::Update );
 		glUseProgram( p );
 		SetStateUniforms( p );
-		samplers( p, { "StateA", "StateB", "StateC", "StateD", "StarA", "ClockTexture", "FluxXA", "FluxXB", "FluxXC",
-		               "FluxXD", "FluxYA", "FluxYB", "FluxYC", "FluxYD" } );
+		samplers( p, { "StateA", "StateB", "StateC", "StateD", "StarA", "StarB", "ClockTexture", "FluxXA", "FluxXB",
+		               "FluxXC", "FluxXD", "FluxYA", "FluxYB", "FluxYC", "FluxYD" } );
 		uniform1f( p, "CoolingRate", static_cast< float >( m.cooling ) );
 		uniform1f( p, "CoolingFloorT", test.backgroundPressure / test.backgroundDensity );
 		uniform1f( p, "GLMAlpha", kGLMAlpha );
 		uniform1i( p, "UseEntropy", test.entropy ? 1 : 0 );
 		uniform1f( p, "EntropySwitch", kEntropySwitch );
 		BoundTextures bound( { s.Texture( 0 ), s.Texture( 1 ), s.Texture( 2 ), s.Texture( 3 ), star.Texture( 0 ),
-		                       clock[ clockIndex ].TextureID(), fluxX.Texture( 0 ), fluxX.Texture( 1 ),
+		                       star.Texture( 1 ), clock[ clockIndex ].TextureID(), fluxX.Texture( 0 ), fluxX.Texture( 1 ),
 		                       fluxX.Texture( 2 ), fluxX.Texture( 3 ), fluxY.Texture( 0 ), fluxY.Texture( 1 ),
 		                       fluxY.Texture( 2 ), fluxY.Texture( 3 ) } );
 		DrawInto( state[ 1 - current ] );
