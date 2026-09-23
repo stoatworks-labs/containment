@@ -1195,11 +1195,19 @@ FFResult ContainmentPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 	if( view == 0 && lines > 0.0f && coils.count > 0 )
 	{
 		Potential();
-		//Count contours across the bottle's flux, centre to rim.
+		//Count contours across the bottle's flux, centre to rim: the largest
+		//|A - A_centre| round the circle of radius 0.5. (Not in a gap: there
+		//B is radial, so dA/dr = -B_phi = 0 and a multipole's A is 0 -- the
+		//first version measured the span there, got ~0, and drew the lines
+		//infinitely close.)
 		const double cx = 0.5 * grid.lx, cy = 0.5 * grid.ly;
-		const double gap = spinAngle + kPi / coils.count;
-		const double span = std::abs( VacuumPotential( coils, cx + 0.5 * std::cos( gap ), cy + 0.5 * std::sin( gap ) )
-		                              - VacuumPotential( coils, cx, cy ) );
+		const double centre = VacuumPotential( coils, cx, cy );
+		double span = 0.0;
+		for( int k = 0; k < 360; ++k )
+		{
+			const double a = 2.0 * kPi * k / 360.0;
+			span = std::max( span, std::abs( VacuumPotential( coils, cx + 0.5 * std::cos( a ), cy + 0.5 * std::sin( a ) ) - centre ) );
+		}
 		lineSpacing = static_cast< float >( span / LineCountFromParam( params[ PT_LINE_COUNT ] ) );
 	}
 

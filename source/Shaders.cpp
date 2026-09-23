@@ -1415,9 +1415,15 @@ void main()
 		//by the plasma sitting on them.
 		if( LineAmount > 0.0 && LineSpacing > 0.0 )
 		{
-			float f = texture( Potential, uv ).r / LineSpacing;
-			float d = abs( fract( f + 0.5 ) - 0.5 ) / max( fwidth( f ), 1e-6 );
-			light += LineAmount * 3.0 * exp( -d * d ) * e.rgb;
+			float f  = texture( Potential, uv ).r / LineSpacing;
+			float fw = max( fwidth( f ), 1e-6 );
+			float d  = abs( fract( f + 0.5 ) - 0.5 ) / fw;
+			//Where the lines are closer than about two pixels they cannot be
+			//drawn as lines -- every pixel is within a pixel of one and the
+			//whole region just lights up (it did, beside the coils, and it
+			//made Field Line Count do nothing). They fade out there instead.
+			float resolved = clamp( 1.5 - 3.0 * fw, 0.0, 1.0 );
+			light += LineAmount * 3.0 * resolved * exp( -d * d ) * e.rgb;
 		}
 
 		light *= Gain;

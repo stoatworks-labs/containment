@@ -1,0 +1,24 @@
+# The Green Orb reel: `cttest --film 780 --size 1280x720 --preset docs/green-orb.preset
+# --script docs/demo.cues | ffmpeg -f rawvideo -pix_fmt rgba -s 1280x720 -r 60 -i - demo.mp4`
+#
+# Tracks hold before their first key and interpolate between keys, so a
+# button press is three keys and a toggle is keyed on both sides of its edge.
+
+# The ball writhes in the turning bottle from frame 0 (ignited on the first frame).
+
+# 4 s: a pellet -- cold dense fuel dropped in the middle, swallowed.
+239 Pellet 0
+240 Pellet 1
+241 Pellet 0
+
+# 8 s: quench. The coils let go and the ball free-expands into a fireball.
+479 Quench 0
+480 Quench 1
+# 10 s: the coils come back.
+599 Quench 1
+600 Quench 0
+
+# 11 s: a fresh ball.
+659 Ignite 0
+660 Ignite 1
+661 Ignite 0
