@@ -12,6 +12,8 @@
 #                 only build worth measuring is one configured from nothing.
 #   shaders       every program the plugin compiles, as it compiles it: no
 #                 reserved word as an identifier, and glslc accepts it.
+#   demo          the browser demo's copy of those shaders is still the
+#                 plugin's, piece for piece and program for program.
 #   offline       the checks that need no GL -- names, presets, the Brio-Wu
 #                 reference, the coils' vacuum field -- and their negative
 #                 controls. This is what CI runs.
@@ -88,6 +90,21 @@ if out=$( tools/check-shaders.sh "$CTTEST" ); then
 else
 	printf '%s\n' "$out"
 	fail "a shader is not clean"
+fi
+
+#---------------------------------------------------------------------------
+step "demo: the browser copy of the shaders"
+#---------------------------------------------------------------------------
+# demo/plugin.js carries every piece of GLSL above, joined into the same
+# programs, for the page at containment-demo.stoatworks-labs.com. This fails
+# if one character, or the order of one program's pieces, has drifted. It
+# cannot check the CPU half the page ports to JavaScript (the conversions, the
+# coils, the stirring, the substep plan); only a reader can.
+if out=$( python3 demo/tools/check_shaders.py 2>&1 ); then
+	pass "$( printf '%s\n' "$out" | tail -1 )"
+else
+	printf '%s\n' "$out" | grep -v '^ok' | sed 's/^/      /'
+	fail "the demo's shaders have drifted from source/Shaders.cpp"
 fi
 
 #---------------------------------------------------------------------------

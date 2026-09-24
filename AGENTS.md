@@ -450,5 +450,78 @@ Not verified, or not done:
 - **Resolume's FFT bins** are assumed to be what rosette assumed.
 - **CI has never run** (no remote). Its steps were run here by hand.
 - **Stretch goals not attempted**: the tokamak view and the "Over"
-  registration. OpenFX port, browser demo and user guide: not required for
-  0.1.0.
+  registration. OpenFX port and user guide: not required for 0.1.0. The
+  browser demo came the same day (below).
+
+## The browser demo
+
+`demo/` is the page at **containment-demo.stoatworks-labs.com**, a
+static-assets Worker (`wrangler.toml`, no build step), added 2026-09-24 on the
+day of 0.1.0. The zone had reached Cloudflare's 100 Workers custom domains, so
+the host is a Worker **route** on a proxied `AAAA 100::` DNS record made
+through the API (slowscan's pattern); deleting that record takes the page dark
+while deploys stay green. `.github/workflows/deploy.yml` (idler's, slug and
+host changed) redeploys on every push to main and checks the live `<head>`.
+
+**The solver runs for real.** All twenty raw-string pieces of `Shaders.cpp`
+are in `demo/plugin.js` unedited, and `PROGRAM_PIECES` joins them exactly as
+`SourceFor()` does. `demo/tools/check_shaders.py` (verify step "demo") fails
+if a character of any piece drifts, if a program's pieces differ in content
+or order, if the vertex shader is not `kVersion + kVertex`, or if
+Shaders.cpp grows a piece the check does not compare; both halves were
+negative-controlled when it was written (the MC limiter's `l + r` -> `l - r`
+in the JS copy, and flux's COMMON/RIEMANN swapped). The kit's `port()` only
+swaps the version line and adds precision qualifiers: the shaders compile in
+WebGL2 as they are (checked on ANGLE Metal).
+
+**The CPU half is a hand port, and only a reader checks it**: `Controls.cpp`
+whole, `MakeCoils` / `VacuumField` / `VacuumPotential` / `ChooseGrid` / `Pcg`
+(64-bit, in BigInt) / `Drive` from `Physics.cpp`, `Presets.h` and `P()`, and
+from `Containment.cpp`: `CurrentModel`, `EnsureBuffers`, `SetStateUniforms`,
+`Ignite`, `Sources`, `Clock`, `Substep`, `ReadClock` (a synchronous
+`readPixels` of the 2x1 float clock, as `glGetTexImage` is), `Advance`
+(last frame's speed + 10%, capped at 48; synchronous after an Ignite or a
+pellet), the gaussian weights of `Glow`, `Potential`'s V-cycle schedule and
+`ProcessOpenGL`'s order. It was cross-checked once, when written: View =
+Density at Detail 128 on a 960x540 frame after ~3 τ_A, the page's picture
+against `cttest --set View=1 --set Detail=0 --frames 600 --size 960x540`,
+showed the same cusp arms, the same curled interchange fingers at the ball's
+edge, in the same places (the drive's PCG stream is the plugin's, reseeded
+0x5eed on Ignite). Not bit-compared: the page's frame times are the
+browser's, not a fixed 1/60. The page planned 12-15 substeps a frame; cttest
+took 6794 in 600 frames (11.3).
+
+**Decided: the page defaults to Detail 128, not the constructor's 256**
+(`DEMO_DETAIL`). Measured headless in Chrome (ANGLE Metal, M4 Max, 960x540):
+128 holds 60 fps at 12-14 substeps; 256 runs about 47-60 fps at 26-31
+substeps. That is the fastest GPU this fleet has, and 256 is ~8x the work of
+128 (4x the cells, twice the substeps), so a laptop or phone GPU would crawl.
+A slow browser does not change the physics (each frame is still clamped to
+0.1 s and the substep cap makes time run slow, never unstable), and the stats
+line under the picture says when the cap bites. The banner, the Detail hint
+and the disclosure all say 128; 256, 512 and 1024 run the same solver from
+the dropdown. Every other default is the constructor's.
+
+Other differences, all on the page: Audio / Audio Heat / Audio Pellets are
+absent (no FFT buffer; exact, since a silent analyser reports level 0 and
+never fires); Ignite and Pellet are booleans the renderer takes and releases
+(the kit has no event type); the Preset dropdown is the plugin's own with its
+override model, and the kit's presets menu is not used; the About block is
+absent; Restart re-ignites (the plugin has no Restart); the clip defaults to
+the kit's colour bars. Needs `EXT_color_buffer_float` and
+`OES_texture_float_linear`, and stops with a message without either; the
+update pass's fifteen samplers and the four draw buffers are checked too.
+
+Traps: the kit's `Program.set()` sends one number as `uniform1f`, so every
+integer uniform goes through `setInt` / `uniform2i` or it is silently dead;
+Chrome's headless SwiftShader runs this solver at under 1 fps with the
+cap biting every frame, so verify with `--use-angle=metal`; SwiftShader also
+logs "GPU stall due to ReadPixels" warnings (the clock read-back, which the
+plugin stalls on too), warnings only; the Browser pane runs hidden at ~2 fps and
+then every frame is the 0.1 s clamp, which makes the cap bite and reads like
+a slow page.
+
+On the live site the page logs one console error, the zone's injected inline
+`/cdn-cgi/challenge-platform` script refused by the page's `script-src 'self'`
+CSP, as every `*-demo` page does (recorded in the fleet's DEMO-BRIEF sweep
+list, undecided). Nothing of the page's own logs an error.

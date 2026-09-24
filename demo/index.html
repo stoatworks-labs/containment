@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Containment — browser demo | Stoatworks Labs</title>
+    <meta name="description" content="Try the Containment plasma FFGL plugin for Resolume in your browser. The plugin's own 2.5-D ideal MHD solver (MUSCL-Hancock, HLLD, GLM) runs as WebGL2 passes on its own shaders, with its CPU half ported to JavaScript. Starts at Detail 128, not the plugin's 256." />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./vendor/kit.css" />
+    <link rel="canonical" href="https://containment-demo.stoatworks-labs.com/" />
+  </head>
+  <body>
+    <main id="demo">
+      <noscript>
+        <p>
+          This demo runs the plugin's own MHD solver in your browser, so it
+          needs JavaScript and WebGL2 with float render targets. The plugin
+          itself, its source and its downloads are on
+          <a href="https://github.com/stoatworks-labs/containment">its repository</a>.
+        </p>
+      </noscript>
+    </main>
+
+    <script type="module" src="./plugin.js"></script>
+    <script
+      src="./vendor/support-footer.js"
+      defer
+      data-app="Containment"
+      data-repo="https://github.com/stoatworks-labs/containment"
+      data-note="A browser demo of the plugin's own solver, with its CPU half ported to JavaScript. Nothing you load here leaves your machine."
+    ></script>
+  </body>
+</html>

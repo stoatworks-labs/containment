@@ -124,7 +124,8 @@ diagnostics log says so.
 It has **never been loaded into Resolume**. `oxbow probe` reads the bundle
 the way a host does and finds `SW Containment` / `CT01` / effect. Nothing
 else has run it. It has only been built and measured on macOS (Apple
-Silicon, M4 Max). There is no OpenFX port, no browser demo and no user guide.
+Silicon, M4 Max). There is no OpenFX port and no user guide. There is a
+[browser demo](#browser-demo) that runs the plugin's own solver in WebGL2.
 
 What is measured, on this machine:
 
@@ -181,6 +182,20 @@ What is **not** verified, and is the honest limit of this release:
   tokamak.
 - **Brio–Wu's reference is computed**, by an independent solver in the
   harness. There was no machine-readable published table to hand.
+
+## Browser demo
+
+**[containment-demo.stoatworks-labs.com](https://containment-demo.stoatworks-labs.com/)**
+runs the plugin's own GLSL solver in the browser: every shader piece in
+`source/Shaders.cpp`, unedited and assembled into the same fourteen programs,
+on RGBA32F state in WebGL2 (it needs `EXT_color_buffer_float`). The CPU half
+(the control conversions, the coils, the stirring, the presets, the substep
+plan and the frame sequence) is ported to JavaScript, which only a reader
+checks. It is not the plugin, and says so: it **starts at Detail 128**, not
+the plugin's 256, so a browser keeps up (256 and above are on the dropdown),
+and the audio controls are absent because a browser has no FFT buffer. The
+page lists every other difference at its foot. `demo/tools/check_shaders.py`,
+run by `tools/verify.sh`, fails if the page's copy drifts by one character.
 
 ## Build
 

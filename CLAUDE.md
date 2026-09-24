@@ -82,8 +82,22 @@ floors or the dual-energy switch.
 
 ## Not done yet
 - Never loaded into Resolume (`oxbow probe` only). Never built on Windows. No
-  OFX port, no browser demo, no user guide. `StoatworksAbout.h` and
+  OFX port, no user guide. `StoatworksAbout.h` and
   `ATTRIBUTIONS.md` are provisional hand copies.
+
+## Browser demo
+- `demo/` is containment-demo.stoatworks-labs.com: a static-assets Worker
+  (`wrangler.toml`, a Worker ROUTE on a proxied AAAA 100:: record, because the
+  zone is at its 100 custom-domain limit), no build step. `deploy.yml` redeploys
+  it on every push to main; by hand: `cf-run npx wrangler deploy`.
+- `demo/plugin.js` carries every shader piece unedited plus `PROGRAM_PIECES`
+  (SourceFor's joins). **Change a shader, copy it across**:
+  `python3 demo/tools/check_shaders.py` (verify step "demo") fails otherwise.
+- The CPU half (Controls, MakeCoils, ChooseGrid, Pcg, Drive, Presets/P(),
+  ProcessOpenGL's sequence) is a hand port: change it there too.
+- `demo/vendor/` is the shared kit: never edit it; re-vendor with
+  `stoatworks-backend/resolume-demo/sync.sh containment`.
+- The page defaults to Detail 128 (`DEMO_DETAIL`), not 256; said on the page.
 
 ## Diagnostics
 
