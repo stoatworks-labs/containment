@@ -515,7 +515,14 @@ int main( int argc, char** argv )
 		else if( mode == "negative" )
 			result = RunNegative();
 		else if( mode == "bench" )
-			result = RunBench();
+			result = RunBench( [ & ]( Rig& rig ) {
+				for( const std::string& setting : settings )
+				{
+					std::string error;
+					if( !applySetting( rig.plugin, setting, error ) )
+						std::fprintf( stderr, "--set %s: %s\n", setting.c_str(), error.c_str() );
+				}
+			} );
 		else if( mode == "stats" )
 		{
 			//A development aid: the state's ranges after --frames, with --set.

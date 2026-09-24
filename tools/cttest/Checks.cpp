@@ -2323,7 +2323,7 @@ int RunNegative( bool offline )
 //===========================================================================
 // --bench
 //===========================================================================
-int RunBench()
+int RunBench( const std::function< void( Rig& ) >& before )
 {
 	Say( "\n=== bench: ms per frame, the default look, 60 frames after 30 of warm-up\n" );
 	struct Size
@@ -2338,6 +2338,8 @@ int RunBench()
 			Rig rig;
 			if( !rig.Init( size.w, size.h ) )
 				return 1;
+			if( before )
+				before( rig );
 			rig.Set( PT_DETAIL, DetailParam( cells ) );
 			if( !rig.Render( 30 ) )
 				return 1;

@@ -2,6 +2,8 @@
 
 #include "Harness.h"
 
+#include <functional>
+
 namespace cttest
 {
 // Each returns 0 on pass; the failures are counted in g_failures.
@@ -29,5 +31,6 @@ int RunNames( const Perturb& perturb );
 /// The negative controls; `offline` runs only those of the checks above that
 /// need no GL context.
 int RunNegative( bool offline = false );
-int RunBench();
+/// `before` is applied to every rig first (main's --set / --preset).
+int RunBench( const std::function< void( Rig& ) >& before = {} );
 } // namespace cttest

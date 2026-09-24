@@ -213,7 +213,7 @@ ContainmentPlugin::ContainmentPlugin()
 	params[ PT_COIL_SPIN ]   = 0.55f; //0.1 rad per tau_A
 	params[ PT_CURVATURE ]   = 0.316f;//g_eff 0.3
 	params[ PT_QUENCH ]      = 0.0f;
-	params[ PT_BOUNDARY ]    = static_cast< float >( Boundary::Open );
+	params[ PT_BOUNDARY ]    = static_cast< float >( Boundary::Wall );
 
 	params[ PT_SPEED ]       = ParamFromSpeed( 0.3f );
 	params[ PT_RESISTIVITY ] = 0.0f;

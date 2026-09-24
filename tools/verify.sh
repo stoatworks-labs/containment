@@ -66,10 +66,13 @@ fi
 step "build (fresh universal Release, $(basename "$BUILD"))"
 #---------------------------------------------------------------------------
 rm -rf "$BUILD"
-if cmake -B "$BUILD" -DCMAKE_BUILD_TYPE=Release >/dev/null \
-	&& cmake --build "$BUILD" -j"$(sysctl -n hw.ncpu)" >/dev/null; then
-	pass "built"
+buildlog="$( mktemp )"
+if cmake -B "$BUILD" -DCMAKE_BUILD_TYPE=Release >"$buildlog" 2>&1 \
+	&& cmake --build "$BUILD" -j"$(sysctl -n hw.ncpu)" >>"$buildlog" 2>&1; then
+	pass "built ($( grep -c 'warning:' "$buildlog" ) warnings, all in the vendored SDK: $( grep 'warning:' "$buildlog" | grep -vc 'external/ffgl' ) outside it)"
+	rm -f "$buildlog"
 else
+	tail -30 "$buildlog" | sed 's/^/      /'
 	fail "the build failed"
 	printf '\n%d passed, %d FAILED\n' "$passes" "$failures"
 	exit 1
@@ -91,7 +94,7 @@ fi
 step "offline"
 #---------------------------------------------------------------------------
 if out=$( "$CTTEST" --offline 2>&1 ); then
-	pass "cttest --offline: $( grep -c '^  ok' <<<"$out" ) checks, $( grep -o 'negative controls: .*' <<<"$out" )"
+	pass "cttest --offline: names, presets, reference, vacuum; $( grep -o 'negative controls: .*' <<<"$out" )"
 else
 	printf '%s\n' "$out" | grep -E 'FAIL' | sed 's/^/      /'
 	fail "cttest --offline"
