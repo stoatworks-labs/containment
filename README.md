@@ -34,6 +34,48 @@ plasma on them. Rendered by the plugin's offline harness (`cttest`), not
 captured from Resolume. A 13-second reel (a pellet, a quench, a fresh ball)
 is `docs/demo.mp4`.</sub>
 
+<!-- downloads:start -->
+
+## Download
+
+**[v0.1.0](https://github.com/stoatworks-labs/containment/releases/tag/v0.1.0)** — prebuilt for macOS and Windows. Pick your platform:
+
+<details>
+<summary><b>macOS</b> — Universal (Apple Silicon + Intel)</summary>
+
+| Build | Download | Size |
+| --- | --- | --- |
+| Universal (Apple Silicon + Intel) · .dmg disk image | [`containment-0.1.0-macos-universal.dmg`](https://github.com/stoatworks-labs/containment/releases/download/v0.1.0/containment-0.1.0-macos-universal.dmg) | 296 KB |
+| Universal (Apple Silicon + Intel) · .zip archive | [`containment-macos-universal.zip`](https://github.com/stoatworks-labs/containment/releases/latest/download/containment-macos-universal.zip) | 250 KB |
+
+</details>
+
+<details>
+<summary><b>Windows</b> — x64</summary>
+
+| Build | Download | Size |
+| --- | --- | --- |
+| x64 · .exe installer | [`containment-0.1.0-windows-x86_64-setup.exe`](https://github.com/stoatworks-labs/containment/releases/download/v0.1.0/containment-0.1.0-windows-x86_64-setup.exe) | 251 KB |
+| x64 · .zip archive | [`containment-windows-x86_64.zip`](https://github.com/stoatworks-labs/containment/releases/latest/download/containment-windows-x86_64.zip) | 147 KB |
+
+</details>
+
+All builds, checksums and release notes: [github.com/stoatworks-labs/containment/releases](https://github.com/stoatworks-labs/containment/releases).
+
+macOS builds are signed and notarised and open normally. The Windows builds are unsigned, so SmartScreen warns once.
+
+<!-- downloads:end -->
+
+[![Containment — a ball of plasma in a magnetic bottle, for Resolume](docs/video-thumb.png)](https://www.youtube.com/watch?v=r5BGDU6JjoI)
+
+*[Watch it](https://www.youtube.com/watch?v=r5BGDU6JjoI) — 80 seconds:
+a ball lit from the clip, the four-, six- and eight-pole stars, the guide field taken away
+and the ball draining through the cusps, Fuel refilling it, Cusp Leak's jets, Rayleigh–Taylor
+fingers, pellets, the quench fireball, the Green Orb and its field lines. Every frame is the
+real plugin's output: an FFGL plugin has no window, so the footage is rendered by this
+repository's own offline harness (`cttest --pipe`, driven by a cue sheet) rather than filmed
+off a screen, and the clips are Resolume's bundled demo media.*
+
 ## The one idea
 
 **The picture is a ball of hot plasma held in a magnetic bottle, and the
@@ -121,11 +163,18 @@ diagnostics log says so.
 
 **v0.1.0, 2026-09-24, and honestly early.**
 
-It has **never been loaded into Resolume**. `oxbow probe` reads the bundle
-the way a host does and finds `SW Containment` / `CT01` / effect. Nothing
-else has run it. It has only been built and measured on macOS (Apple
-Silicon, M4 Max). There is no OpenFX port and no user guide. There is a
+It has **never been loaded into Resolume on macOS**. `oxbow probe` reads
+the bundle the way a host does and finds `SW Containment` / `CT01` / effect.
+Its physics has only been measured on macOS (Apple Silicon, M4 Max).
+**On Windows** (2026-09-24), a CI build of v0.1.0 loads, registers and
+renders in Resolume Arena 7.27.1 on win-lab (Mesa llvmpipe, no GPU): all 42
+host controls match the declaration, all 32 testable controls move the
+picture, and Arena's log stays clean, 9 of the fleet gate's 9 checks in two
+runs (the three audio controls cannot be tested there). Software rendering
+says nothing about a GPU or about speed. There is a
+[user guide](https://stoatworks-labs.com/software/containment/guide/) and a
 [browser demo](#browser-demo) that runs the plugin's own solver in WebGL2.
+There is no OpenFX port.
 
 What is measured, on this machine:
 

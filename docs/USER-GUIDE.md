@@ -28,7 +28,10 @@ field lines lit by the plasma sitting on them.*
 > all shown to make those checks fail. All 33 controls are shown to change the picture. It has
 > **never been loaded into Resolume on macOS**, and has only been measured on one Mac's GPU
 > (Apple M4 Max).
-> <!-- WINDOWS -->
+> On Windows, a CI build of v0.1.0 loads, registers and renders in Resolume Arena 7.27.1, with
+> all 42 host controls matching what the plugin declares, and all 32 controls that can be tested
+> there move the picture (the three audio controls cannot: the test box has no sound device) — in
+> two runs, on software rendering, so that says nothing about a GPU or about speed.
 > Try it on a spare layer before you put it in a show.
 >
 > This codebase was created with AI assistance, directed and reviewed by a human author.

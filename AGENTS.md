@@ -436,8 +436,13 @@ and `--alfven` only.
 
 Not verified, or not done:
 
-- **Never loaded into Resolume.** Never built or run on Windows, and never
-  run on another GPU. The x86_64 slice has never executed.
+- **Never loaded into Resolume on macOS**, and never run on another GPU.
+  The x86_64 slice has never executed. On Windows, v0.1.0's CI build passed
+  the fleet's Arena gate 9/9 twice on win-lab (Arena 7.27.1, Mesa llvmpipe,
+  no GPU, 2026-09-24): 42 controls as declared, all 32 testable controls
+  live, the three audio controls untestable there. The expectation's first
+  draft had Speed's default as 0.588; the constructor sets
+  `ParamFromSpeed( 0.3 )` = 0.58804566, which Arena reports exactly.
 - **Open echoes ~12% of a low-frequency wave once**, as the zero-gradient
   ghost did; the echo then leaves. The long run is 20 τ_A (~70 s at the
   default Speed), not an evening.
@@ -448,9 +453,11 @@ Not verified, or not done:
   absorbing margin and Fuel are modelling choices** stated above, not
   textbook ideal MHD.
 - **Resolume's FFT bins** are assumed to be what rosette assumed.
-- **CI has never run** (no remote). Its steps were run here by hand.
+- **CI runs on every push** since the repo went public (2026-09-24): the
+  build, `--list`, glslc over every program, and `--offline`. The GL checks
+  still run only in `verify.sh` here.
 - **Stretch goals not attempted**: the tokamak view and the "Over"
-  registration. OpenFX port and user guide: not required for 0.1.0. The
+  registration. No OpenFX port. The user guide shipped with 0.1.0. The
   browser demo came the same day (below).
 
 ## The browser demo
