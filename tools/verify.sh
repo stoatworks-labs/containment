@@ -1,220 +1,287 @@
 #!/usr/bin/env bash
 #
-# Everything, in the order that fails fastest.
+# Everything that can be checked without a host, in one go.
 #
-# The build is universal on purpose. An arm64-only bundle builds and tests
-# perfectly well here and then fails to load in an Intel Resolume, and the
-# build log calls it a success either way -- so the architecture is checked
-# with lipo, never with the log.
+#     tools/verify.sh [BUILD_DIR]        (default build-verify)
 #
-#     tools/verify.sh [BUILD_DIR]
+# Each step answers a question none of the others can:
 #
-set -euo pipefail
+#   submodule     the FFGL SDK is there, at the fleet's pin (b1afaf9).
+#   build         a FRESH universal Release build. Not the dev build: CMake
+#                 latches the architecture list at the first target, so the
+#                 only build worth measuring is one configured from nothing.
+#   shaders       every program the plugin compiles, as it compiles it: no
+#                 reserved word as an identifier, and glslc accepts it.
+#   offline       the checks that need no GL -- names, presets, the Brio-Wu
+#                 reference, the coils' vacuum field -- and their negative
+#                 controls. This is what CI runs.
+#   physics       every GL check, TWICE: at each check's own raster, and with
+#                 every rig at 320x180, CI's. The grid is the check's either way
+#                 (Detail cells on the short side, the aspect the check asked
+#                 for); the second pass moves only the light's path to the
+#                 raster. A check that held at one raster was fitted to it.
+#   mutation      one character of the shipped limiter changed: checks fail.
+#   negative      every check against a deliberately wrong model: each fails.
+#   pipe          the fleet's --pipe frame format: a partial frame at EOF ends
+#                 the stream, a cue naming no control is refused, and a reader
+#                 that hangs up ends the run with exit 1, not SIGPIPE's 141.
+#   sweep         does every control change the picture.
+#   bundle        lipo (universal), plugMain, the plist, an ad-hoc signature.
+#   oxbow         a real FFGL host loads the bundle and reports the name, id
+#                 and type it sees -- the name field is not null-terminated and
+#                 a host truncates silently past 16 characters.
+#   bench         the render cost, for the record. Not pass/fail.
+#
+# Nothing stops at the first failure: every step runs, and the summary at the
+# end counts what failed.
+#
+set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="${1:-$REPO/build-verify}"
-
 cd "$REPO"
 
+failures=0
+passes=0
 step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
-fail() { printf '\033[31mFAIL\033[0m %s\n' "$1"; exit 1; }
+pass() { printf '   \033[32mok\033[0m   %s\n' "$1"; passes=$(( passes + 1 )); }
+fail() { printf '   \033[31mFAIL\033[0m %s\n' "$1"; failures=$(( failures + 1 )); }
 
 #---------------------------------------------------------------------------
-# Every shader, exactly as the plugin compiles it.
-#
-# The programs are assembled at run time from pieces in Shaders.cpp, so the
-# text a regex could pull out of the source is not the text that runs. The
-# harness writes each program out through the same SourceFor() the plugin
-# compiles (`cttest --dump-shaders DIR`) and both checks below read that.
-#
-# Needs a build, so it runs after one.
-#---------------------------------------------------------------------------
-reserved_words() {
-	local dir="$1" words="patch sample input output filter common active half layout flat smooth noperspective"
-	local bad=0 word
-	for word in $words; do
-		if grep -nE "(float|int|uint|bool|vec[234]|ivec[234]|uvec[234]|mat[234]|Q|Side|Flux)[[:space:]]+$word[[:space:]]*[;=,)]" \
-		            "$dir"/*.frag "$dir"/*.vert >/dev/null 2>&1; then
-			printf '   "%s" is declared as an identifier and is a GLSL reserved word\n' "$word"
-			bad=$(( bad + 1 ))
-		fi
-	done
-	[ "$bad" -eq 0 ] && printf '   none of the reserved words is used as an identifier\n'
-	return "$bad"
-}
-
-# glslc targets SPIR-V; --target-env=opengl4.5 with -fauto-map-locations lets
-# plain GLSL 4.10 through. Optional: `brew install shaderc`.
-shaders_compile() {
-	local dir="$1" bad=0 n=0 shader
-	if ! command -v glslc >/dev/null 2>&1; then
-		printf '   skipped: glslc not installed (brew install shaderc)\n'
-		return 0
-	fi
-	for shader in "$dir"/*.vert "$dir"/*.frag; do
-		[ -e "$shader" ] || continue
-		n=$(( n + 1 ))
-		if ! glslc --target-env=opengl4.5 -fauto-map-locations "$shader" -o /dev/null 2>"$dir/err"; then
-			printf '   %s does not compile\n' "$( basename "$shader" )"
-			sed "s|$dir/||; s|^|      |" "$dir/err"
-			bad=$(( bad + 1 ))
-		fi
-	done
-	if [ "$n" -eq 0 ]; then
-		printf '   no shaders were dumped -- a check that looks at nothing is not a check\n'
-		return 1
-	fi
-	[ "$bad" -eq 0 ] && printf '   %d shaders, all compile\n' "$n"
-	return "$bad"
-}
-
-#---------------------------------------------------------------------------
-step "Submodule"
+step "submodule"
 #---------------------------------------------------------------------------
 if [[ ! -f external/ffgl/CMakeLists.txt ]]; then
 	fail "FFGL SDK missing -- run: git submodule update --init --recursive"
+	printf '\n%d passed, %d FAILED\n' "$passes" "$failures"
+	exit 1
 fi
-echo "ok   FFGL SDK present at $(git -C external/ffgl rev-parse --short HEAD)"
-
-#---------------------------------------------------------------------------
-step "Build (universal)"
-#---------------------------------------------------------------------------
-cmake -B "$BUILD" -DCMAKE_BUILD_TYPE=Release >/dev/null
-cmake --build "$BUILD" -j"$(sysctl -n hw.ncpu)" >/dev/null
-echo "ok   built"
-
-shaders="$( mktemp -d )"
-"$BUILD/cttest" --dump-shaders "$shaders" | sed 's/^/   /'
-
-#---------------------------------------------------------------------------
-step "GLSL reserved words"
-#---------------------------------------------------------------------------
-reserved_words "$shaders" || fail "a GLSL reserved word is used as an identifier"
-
-#---------------------------------------------------------------------------
-step "Shaders"
-#---------------------------------------------------------------------------
-shaders_compile "$shaders" || fail "a shader does not compile"
-rm -rf "$shaders"
-
-#---------------------------------------------------------------------------
-step "Bundle"
-#---------------------------------------------------------------------------
-bundle="$BUILD/Containment.bundle"
-binary="$bundle/Contents/MacOS/Containment"
-
-[[ -f "$binary" ]] || fail "no binary at $binary"
-
-# Universal. The failure this catches ships a plugin that simply does not
-# appear in half the Resolume installs it is given to.
-arches="$(lipo -archs "$binary")"
-[[ "$arches" == *arm64* ]]  || fail "no arm64 slice (got: $arches)"
-[[ "$arches" == *x86_64* ]] || fail "no x86_64 slice (got: $arches)"
-
-# The entry point. A bundle whose registration got dropped by the linker still
-# loads and still exports this -- the OBJECT-library note in CMakeLists.txt is
-# what actually guards the registration; this catches a build that produced no
-# module at all.
-# Captured, then matched from a herestring -- never `nm ... | grep -q`.
-# Under `set -o pipefail` a `grep -q` that finds its match exits immediately,
-# the writer upstream takes SIGPIPE, and the PIPELINE reports failure even
-# though the symbol is there. It is output-size dependent, so it fires on the
-# bigger binary first and looks intermittent. A herestring is not a pipeline,
-# so nothing can SIGPIPE.
-symbols=$( nm -gU "$binary" 2>/dev/null || true )
-grep -q '_plugMain' <<<"$symbols" || fail "plugMain not exported"
-
-echo "ok   Containment: $arches, plugMain exported"
-
-#---------------------------------------------------------------------------
-step "Bundle metadata"
-#---------------------------------------------------------------------------
-plist="$bundle/Contents/Info.plist"
-[[ -f "$plist" ]] || fail "no Info.plist in the bundle"
-
-read_plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$plist" 2>/dev/null || true; }
-
-identifier="$( read_plist CFBundleIdentifier )"
-executable="$( read_plist CFBundleExecutable )"
-package="$( read_plist CFBundlePackageType )"
-version="$( read_plist CFBundleVersion )"
-declared="$( sed -n 's/^[[:space:]]*VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1 )"
-
-[[ "$identifier" == "com.stoatworks.ffgl.containment" ]] || fail "bundle id is '$identifier'"
-[[ "$executable" == "Containment" ]] || fail "CFBundleExecutable is '$executable'"
-[[ "$package" == "BNDL" ]] || fail "CFBundlePackageType is '$package', not BNDL"
-# The version drifts across the manifest, the plist and the About header more
-# often than anything else in the fleet, so all three are compared rather than
-# any one of them trusted.
-[[ "$version" == "$declared" ]] || fail "plist version '$version' != CMakeLists '$declared'"
-grep -q "versionFallback = \"v$declared\"" source/StoatworksAbout.h \
-	|| fail "StoatworksAbout.h's versionFallback is not v$declared"
-
-echo "ok   $identifier, $package, v$version -- plist, CMakeLists and About agree"
-
-#---------------------------------------------------------------------------
-step "Code signature"
-#---------------------------------------------------------------------------
-# Ad hoc, which is what a local build gets. The release workflow signs and
-# notarises properly; this only proves the bundle is well enough formed to be
-# signed at all, which a malformed one is not.
-codesign --force --sign - --timestamp=none "$bundle" >/dev/null 2>&1 \
-	|| fail "the bundle could not be ad-hoc signed"
-codesign --verify --deep --strict "$bundle" >/dev/null 2>&1 \
-	|| fail "the ad-hoc signature does not verify"
-echo "ok   ad-hoc signed and verified"
-
-#---------------------------------------------------------------------------
-step "Host view"
-#---------------------------------------------------------------------------
-# What a host actually reads out of the bundle: the id, the name and the type.
-# The FFGL name field is char[ 16 ] and is NOT null-terminated, so a long name
-# is truncated silently and nothing in this repo would ever notice -- only
-# something that reads the bundle the way a host does.
-#
-# oxbow lives in the fleet, not here, so this is a skip rather than a failure
-# when it is not to hand.
-OXBOW="${OXBOW:-$HOME/Projects/resolume/oxbow/build/oxbow}"
-if [[ -x "$OXBOW" ]]; then
-	probe="$( "$OXBOW" probe "$bundle" 2>&1 || true )"
-	printf '%s\n' "$probe" | sed 's/^/   /'
-	grep -q 'CT01' <<<"$probe" || fail "oxbow did not read the id CT01"
-	grep -q 'SW Containment' <<<"$probe" || fail "oxbow did not read the name 'SW Containment'"
-	grep -qi 'effect' <<<"$probe" || fail "oxbow did not read the type as an effect"
-	echo "ok   a host reads CT01 / SW Containment / effect"
+pin="$( git -C external/ffgl rev-parse --short=7 HEAD )"
+if [[ "$pin" == "b1afaf9" ]]; then
+	pass "FFGL SDK at $pin, the fleet's pin"
 else
-	echo "   skipped: no oxbow at $OXBOW (set OXBOW=...)"
+	fail "FFGL SDK at $pin, not the fleet's b1afaf9"
 fi
 
 #---------------------------------------------------------------------------
-step "Checks"
+step "build (fresh universal Release, $(basename "$BUILD"))"
 #---------------------------------------------------------------------------
-# Every claim the README makes, in the order the README makes them.
-for check in briowu alfven conserve divb balance rt cusp frozen quench resist floors still glow state; do
-	"$BUILD/cttest" --$check
+rm -rf "$BUILD"
+if cmake -B "$BUILD" -DCMAKE_BUILD_TYPE=Release >/dev/null \
+	&& cmake --build "$BUILD" -j"$(sysctl -n hw.ncpu)" >/dev/null; then
+	pass "built"
+else
+	fail "the build failed"
+	printf '\n%d passed, %d FAILED\n' "$passes" "$failures"
+	exit 1
+fi
+CTTEST="$BUILD/cttest"
+
+#---------------------------------------------------------------------------
+step "shaders"
+#---------------------------------------------------------------------------
+if out=$( tools/check-shaders.sh "$CTTEST" ); then
+	printf '%s\n' "$out"
+	pass "every program: no reserved word, glslc compiles it"
+else
+	printf '%s\n' "$out"
+	fail "a shader is not clean"
+fi
+
+#---------------------------------------------------------------------------
+step "offline"
+#---------------------------------------------------------------------------
+if out=$( "$CTTEST" --offline 2>&1 ); then
+	pass "cttest --offline: $( grep -c '^  ok' <<<"$out" ) checks, $( grep -o 'negative controls: .*' <<<"$out" )"
+else
+	printf '%s\n' "$out" | grep -E 'FAIL' | sed 's/^/      /'
+	fail "cttest --offline"
+fi
+
+#---------------------------------------------------------------------------
+step "physics, at each check's own raster and at 320x180"
+#---------------------------------------------------------------------------
+# Every claim the README makes, in the order it makes them.
+checks="briowu alfven conserve divb balance rt cusp frozen quench resist floors still glow state open"
+for size in own 320x180; do
+	for check in $checks; do
+		args=( "--$check" )
+		[[ "$size" != own ]] && args+=( --size "$size" )
+		if out=$( "$CTTEST" "${args[@]}" 2>&1 ); then
+			pass "--$check @ $size: $( grep -c '^  ok' <<<"$out" ) assertions"
+		else
+			fail "--$check @ $size"
+			printf '%s\n' "$out" | grep -E 'FAIL ' | sed 's/^/      /'
+		fi
+	done
 done
 
 #---------------------------------------------------------------------------
-step "The harness drives the shipped shader"
+step "mutation: the harness drives the shipped shader"
 #---------------------------------------------------------------------------
-"$BUILD/cttest" --mutation
+if out=$( "$CTTEST" --mutation 2>&1 ); then
+	pass "$( grep -o 'against the mutated shader.*' <<<"$out" )"
+else
+	fail "cttest --mutation"
+	printf '%s\n' "$out" | tail -3 | sed 's/^/      /'
+fi
 
 #---------------------------------------------------------------------------
-step "Negative controls"
+step "negative controls"
 #---------------------------------------------------------------------------
 # The checks above, run against a model that is deliberately wrong, and
 # required to fail. A check that cannot fail is not a check.
-"$BUILD/cttest" --negative
+if out=$( "$CTTEST" --negative 2>&1 ); then
+	pass "$( grep -o 'negative controls: .*' <<<"$out" )"
+else
+	fail "a negative control passed against a wrong model"
+	printf '%s\n' "$out" | grep -E 'PASSED against' | sed 's/^/      /'
+fi
 
 #---------------------------------------------------------------------------
-step "Dead controls"
+step "pipe"
+#---------------------------------------------------------------------------
+# Two and a half frames in must be exactly two frames out and a clean exit --
+# a partial frame is the end of the stream, never a frame.
+frame=$(( 64 * 36 * 4 ))
+raw=$( mktemp ); cues=$( mktemp )
+head -c $(( frame * 5 / 2 )) /dev/zero > "$raw"
+got=$( "$CTTEST" --pipe --size 64x36 < "$raw" 2>/dev/null | wc -c | tr -d ' ' )
+status=${PIPESTATUS[0]}
+if [ "$status" -eq 0 ] && [ "$got" = "$(( frame * 2 ))" ]; then
+	pass "2.5 frames in, exactly 2 frames out, clean exit"
+else
+	fail "2.5 frames in gave $got bytes out (want $(( frame * 2 ))), exit $status"
+fi
+# A cue naming no parameter must be refused rather than silently doing nothing
+# to a take. Read from a file, not a pipe: a writer killed by SIGPIPE would fail
+# the pipeline whatever cttest did, and the refusal would pass for the wrong
+# reason.
+printf '0 No Such Control 0.5\n' > "$cues"
+"$CTTEST" --pipe --size 64x36 --script "$cues" < "$raw" >/dev/null 2>&1
+status=$?
+if [ "$status" -eq 2 ]; then
+	pass "a cue naming no parameter is refused (exit 2)"
+else
+	fail "a cue naming no parameter gave exit $status, not 2"
+fi
+printf '0 Field 0.25\n1 Field 0.5\n0 Ignite 0\n1 Ignite 1\n' > "$cues"
+got=$( "$CTTEST" --pipe --size 64x36 --script "$cues" < "$raw" 2>/dev/null | wc -c | tr -d ' ' )
+if [ "$got" = "$(( frame * 2 ))" ]; then
+	pass "a cue sheet of real controls is accepted and still gives 2 frames"
+else
+	fail "a cue sheet of real controls gave $got bytes"
+fi
+# The picture goes through: a mid-grey clip with Mix 0 comes back mid-grey.
+python3 -c "import sys; sys.stdout.buffer.write(bytes([128,128,128,255]) * (64*36*2))" > "$raw"
+if python3 - "$CTTEST" "$raw" <<'PY'
+import subprocess, sys
+out = subprocess.run([sys.argv[1], "--pipe", "--size", "64x36", "--set", "Mix=0"],
+                     stdin=open(sys.argv[2], "rb"), capture_output=True).stdout
+sys.exit(0 if out == open(sys.argv[2], "rb").read() else 1)
+PY
+then
+	pass "with Mix 0 the frames come back byte for byte"
+else
+	fail "with Mix 0 the piped frames are not the input"
+fi
+# A reader that hangs up early (`| head -c 1`, ffmpeg dying) must end the run
+# with exit 1 and a message, not SIGPIPE's silent 141.
+head -c $(( frame * 20 )) /dev/zero > "$raw"
+"$CTTEST" --pipe --size 64x36 < "$raw" 2>/dev/null | head -c 1 >/dev/null
+status=${PIPESTATUS[0]}
+if [ "$status" -eq 1 ]; then
+	pass "a closed stdout ends the run with exit 1, not SIGPIPE"
+else
+	fail "a closed stdout gave exit $status, not 1"
+fi
+rm -f "$raw" "$cues"
+
+#---------------------------------------------------------------------------
+step "sweep"
 #---------------------------------------------------------------------------
 # The only thing that catches a uniform whose name does not match the C++.
-python3 tools/sweep.py --build "$(basename "$BUILD")"
+if out=$( python3 tools/sweep.py --binary "$CTTEST" 2>&1 ); then
+	pass "$( printf '%s\n' "$out" | tail -1 )"
+else
+	printf '%s\n' "$out" | sed 's/^/      /'
+	fail "a control is dead"
+fi
 
 #---------------------------------------------------------------------------
-step "Cost"
+step "bundle"
 #---------------------------------------------------------------------------
-"$BUILD/cttest" --bench
+bundle="$BUILD/Containment.bundle"
+binary="$bundle/Contents/MacOS/Containment"
+if [[ -f "$binary" ]]; then
+	# Universal. The failure this catches ships a plugin that simply does not
+	# appear in half the Resolume installs it is given to.
+	arches="$( lipo -archs "$binary" )"
+	if [[ "$arches" == *arm64* && "$arches" == *x86_64* ]]; then
+		pass "universal: $arches"
+	else
+		fail "not universal: $arches"
+	fi
+	# Captured, then matched from a herestring -- never `nm ... | grep -q`.
+	# Under `set -o pipefail` a `grep -q` that finds its match exits at once,
+	# nm takes SIGPIPE, and the PIPELINE reports failure though the symbol is
+	# there.
+	symbols=$( nm -gU "$binary" 2>/dev/null || true )
+	if grep -q '_plugMain' <<<"$symbols"; then pass "plugMain exported"; else fail "plugMain not exported"; fi
 
-printf '\n\033[32mall green\033[0m\n'
+	plist="$bundle/Contents/Info.plist"
+	read_plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$plist" 2>/dev/null || true; }
+	identifier="$( read_plist CFBundleIdentifier )"
+	executable="$( read_plist CFBundleExecutable )"
+	package="$( read_plist CFBundlePackageType )"
+	version="$( read_plist CFBundleVersion )"
+	declared="$( sed -n 's/^[[:space:]]*VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1 )"
+	# The version drifts across the manifest, the plist and the About header
+	# more often than anything else in the fleet, so all three are compared.
+	if [[ "$identifier" == "com.stoatworks.ffgl.containment" && "$executable" == "Containment" && "$package" == "BNDL" \
+		&& "$version" == "$declared" ]] && grep -q "versionFallback = \"v$declared\"" source/StoatworksAbout.h; then
+		pass "$identifier, $package, v$version -- plist, CMakeLists and About agree"
+	else
+		fail "plist: id '$identifier', executable '$executable', type '$package', version '$version' (CMakeLists $declared)"
+	fi
+	# Ad hoc, which is what a local build gets; the release workflow signs and
+	# notarises properly. This proves the bundle is well enough formed to sign.
+	if codesign --force --sign - --timestamp=none "$bundle" >/dev/null 2>&1 \
+		&& codesign --verify --deep --strict "$bundle" >/dev/null 2>&1; then
+		pass "ad-hoc signed and verified"
+	else
+		fail "the bundle does not take an ad-hoc signature"
+	fi
+else
+	fail "no binary at $binary"
+fi
+
+#---------------------------------------------------------------------------
+step "oxbow"
+#---------------------------------------------------------------------------
+# What a host actually reads out of the bundle. oxbow lives in the fleet, not
+# here, so it is a skip rather than a failure when it is not to hand.
+OXBOW="${OXBOW:-$HOME/Projects/resolume/oxbow/build/oxbow}"
+if [[ -x "$OXBOW" ]]; then
+	probe="$( "$OXBOW" probe "$bundle" 2>&1 || true )"
+	printf '%s\n' "$probe" | sed 's/^/      /'
+	if grep -q 'CT01' <<<"$probe" && grep -q 'SW Containment' <<<"$probe" && grep -qi 'effect' <<<"$probe"; then
+		pass "a host reads CT01 / SW Containment / effect"
+	else
+		fail "oxbow did not read CT01 / SW Containment / effect"
+	fi
+else
+	printf '   skipped: no oxbow at %s (set OXBOW=...)\n' "$OXBOW"
+fi
+
+#---------------------------------------------------------------------------
+step "bench (for the record)"
+#---------------------------------------------------------------------------
+"$CTTEST" --bench | sed 's/^/   /'
+
+printf '\n'
+if [ "$failures" -eq 0 ]; then
+	printf '\033[32mall green\033[0m: %d passed, 0 failed\n' "$passes"
+	exit 0
+fi
+printf '\033[31m%d FAILED\033[0m, %d passed\n' "$failures" "$passes"
+exit 1

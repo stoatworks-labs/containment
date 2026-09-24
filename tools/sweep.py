@@ -23,7 +23,11 @@ sweep look more careful than it is. Each one here was checked by removing it.
 
 Usage::
 
-    tools/sweep.py [--build BUILD_DIR] [--verbose]
+    tools/sweep.py [--build BUILD_DIR | --binary PATH] [--size WxH] [--allow-no-gl] [--verbose]
+
+CI runs it at a small raster with --allow-no-gl: the question is only whether
+a control changed ANY pixel, and a runner that cannot make a GL context skips
+loudly rather than failing for a reason that is not the plugin's.
 """
 
 import argparse
@@ -59,6 +63,7 @@ SWEEP_VALUES = [0.0, 0.137, 0.611, 1.0]
 # parameter's kind but not its element count, so these track the enums in
 # Controls.h by hand.
 OPTION_RANGE = {
+    "Preset": 7,  # Custom + the six rows of Presets.h
     "Profile": 2,
     "Poles": 5,
     "Quench": 2,
@@ -92,8 +97,14 @@ def read_png(path):
     return zlib.decompress(idat)
 
 
-def render(harness, out, settings, raw, verbose):
-    args = [str(harness), "--out", str(out), "--size", "480x270", "--frames", "90"]
+class NoGL(Exception):
+    pass
+
+
+def render(harness, out, settings, raw, verbose, size, allow_no_gl):
+    args = [str(harness), "--out", str(out), "--size", size, "--frames", "90"]
+    if allow_no_gl:
+        args.append("--allow-no-gl")
     args += raw
     for setting in settings:
         args += ["--set", setting]
@@ -104,6 +115,8 @@ def render(harness, out, settings, raw, verbose):
     result = subprocess.run(args, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"cttest failed: {result.stderr.strip()}")
+    if "SKIP" in result.stdout:
+        raise NoGL(result.stdout.strip())
 
     return read_png(out)
 
@@ -138,10 +151,13 @@ def parameters(harness):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--build", default="build")
+    parser.add_argument("--binary", default=None)
+    parser.add_argument("--size", default="480x270")
+    parser.add_argument("--allow-no-gl", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    harness = REPO / args.build / "cttest"
+    harness = pathlib.Path(args.binary) if args.binary else REPO / args.build / "cttest"
     if not harness.exists():
         print(f"no cttest at {harness} -- build first", file=sys.stderr)
         return 2
@@ -167,8 +183,13 @@ def main():
             frames = []
             for value in values:
                 out = tmp / "sweep.png"
-                frames.append(
-                    render(harness, out, base + [f"{name}={value}"], extra, args.verbose))
+                try:
+                    frames.append(
+                        render(harness, out, base + [f"{name}={value}"], extra, args.verbose,
+                               args.size, args.allow_no_gl))
+                except NoGL as skipped:
+                    print(f"sweep: SKIP -- {skipped}. No control was checked.")
+                    return 0
 
             checked += 1
             if all(f == frames[0] for f in frames[1:]):
