@@ -119,8 +119,10 @@ Then:
    the six gaps between the coils. **Poles** changes how many gaps.
 4. **Press Pellet.** A lump of cold, dense fuel drops into the middle, and the ball has to share
    its motion with it.
-5. **Quench on.** The coils let go and the ball goes up as a fireball. Turn it off and they come
-   back; press Ignite for another ball.
+5. **Quench on.** The coils let go. In the default **Wall** vessel there is nowhere to go, so the
+   ball only swells to the walls and dims; the fireball needs an **Open** vessel and a hot ball,
+   which is what the Quench Fireball preset is. Turn Quench off and the coils come back; press
+   Ignite for another ball.
 6. **Preset → Green Orb.** The same bottle turning faster and stirred harder, in the oxygen green
    of the Aurora ramp, with the glare and field lines. While a preset is chosen it owns most of the
    sliders above; set Preset back to **Custom** to play with them again.
@@ -139,8 +141,12 @@ each position stands for is given with each control below.
 **Preset** is at the top. **Custom** means the controls are the truth. Any other row lays a whole
 bottle over the controls it owns, and **choosing one re-ignites**. Resolume cannot be told to move
 its own sliders, so while a preset is chosen the inspector keeps showing your own values for the
-columns the preset owns, and those sliders do nothing until you go back to Custom. A preset
-leaves alone where the ball is, Detail, Speed, the audio, View and Mix.
+columns the preset owns, and those sliders do nothing until you go back to Custom. A preset owns
+the ball's size, temperature and profile, Feed, Clip Heats and Fuel; the whole Bottle group;
+Resistivity, Cooling, Drive and Drive Scale; and Exposure, Temperature Tint, Ramp, Glow, Field
+Lines and Field Line Count. It leaves alone where the ball is, Detail, Speed, the audio,
+View and Mix. So under a preset **Exposure is the preset's**: Cusp Leak's jets are dim on a dark
+clip, and brightening them means copying the preset's values into Custom.
 
 | Preset | What it is |
 | --- | --- |
@@ -149,7 +155,7 @@ leaves alone where the ball is, Detail, Speed, the audio, View and Mix.
 | **Guide Field Bubble** | A top-hat ball in a uniform axial field and nothing else. It swells, rings and settles into a pressure-balanced bubble; while it rings, its edge fingers. |
 | **Cusp Leak** | A hot ball in a six-pole bottle with no guide field, in an **Open** vessel: it squirts out along the six field lines that lead out, and the fuel keeps it squirting. |
 | **Rayleigh-Taylor** | Strong curvature on a guide-field ball: nothing in the plane holds the edge, so it breaks into fingers and mushrooms. |
-| **Quench Fireball** | The coils off and a very hot ball in an Open vessel: it free-expands and leaves the frame. Press Ignite for another. |
+| **Quench Fireball** | The coils off and a very hot ball in an Open vessel: it free-expands and leaves the frame in about half a second at the default Speed, so lower Speed to watch it. Press Ignite for another. |
 
 ![Rayleigh-Taylor: the ball's colours torn into long curling fingers and mushroom caps spreading outwards](fingers.png)
 
@@ -422,6 +428,9 @@ timed on a Windows GPU.
 ---
 
 ## If it looks wrong
+
+**The ball is barely visible.** The plasma is made of the clip, so a dark clip makes a dim
+ball. Raise Exposure, or put it on something brighter.
 
 **It is black.** The ball may have drained away: an Open bottle with no Fuel runs down, and so
 does a ball with Cooling up. Press Ignite. Check Mix and Exposure.
