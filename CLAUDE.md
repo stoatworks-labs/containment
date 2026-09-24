@@ -21,15 +21,25 @@ floors or the dual-energy switch.
 - Every program as compiled: `./build/cttest --dump-shaders DIR`
 - Film: `./build/cttest --film 780 --size 1280x720 --preset docs/green-orb.preset --script docs/demo.cues | ffmpeg -f rawvideo -pix_fmt rgba -s 1280x720 -r 60 -i - out.mp4`
 - Film a clip through it: `ffmpeg -i in.mov -f rawvideo -pix_fmt rgba - | ./build/cttest --pipe --size WxH [--script cues] | ffmpeg …`
+  (raw RGBA in and out; a partial frame at EOF ends the stream; a cue naming
+  no parameter exits 2; a reader that hangs up gives exit 1, SIGPIPE ignored)
 - Do NOT `cmake --install` (it writes into Arena's Extra Effects).
 
 ## Verify
-- Everything: `tools/verify.sh` (fresh universal build, dumped-shader compile,
-  every check, the mutation, the negative controls, the sweep, lipo, plist,
-  ad-hoc signature, `oxbow probe`, the bench)
+- Everything: `tools/verify.sh` (the FFGL pin, a fresh universal build, the
+  shaders, `--offline`, every GL check at its own raster AND at 320x180, the
+  mutation, the negative controls, the pipe, the sweep, lipo, plist, ad-hoc
+  signature, `oxbow probe`, the bench). It runs every step and counts.
+- No GL (what CI runs): `./build/cttest --offline` (`--names`, `--presets`,
+  `--reference`, `--vacuum` and their negative controls)
+- Any check at another raster: `--size 320x180` (the grid keeps the check's
+  aspect; only the light's path to the raster moves)
+- On another rasteriser: `CT_RENDERER=software` (Apple's software renderer,
+  ~50 s a frame -- `--state` and `--alfven` are what is practical)
+- Shaders alone: `tools/check-shaders.sh build/cttest`
 - The solver: `--briowu`, `--alfven`, `--conserve`, `--divb`
 - The bottle: `--balance`, `--rt`, `--cusp`, `--frozen`, `--quench`, `--resist`
-- The model's guards: `--floors`
+- The model's guards: `--floors`, `--open`
 - The light and the host: `--still`, `--glow`, `--state`
 - The harness drives the shipped shader: `--mutation`
 - Every check against a wrong model: `--negative` (`CT_NEGATIVE=name` for one)
@@ -50,8 +60,15 @@ floors or the dual-energy switch.
 - **Dual-energy switch**: p from the entropy where p < 2% of kinetic+magnetic.
 - **Wall = no-slip, line-tied, ghost field = coils + mirrored perturbation.**
   Coil changes are carried through the vessel volumetrically (Sources pass).
-- **Open ghost never falls below the ambient background.** Open is stable for
-  ~3 τ_A of the default look, not indefinitely (see AGENTS.md).
+- **Open is a window onto a bigger bottle**: a margin 0.1 frame heights deep,
+  simulated and never shown, holds an absorbing layer that relaxes the plasma
+  towards the ambient at rest in the coils' field. Wall is the default (Open
+  costs 13–16 ms at 1080p against Wall's 8). The
+  layer's target is the plugin's ambient, so a check that loads any other
+  plasma must use Wall (see AGENTS.md). Its ghost never falls below ambient.
+- **Preset** is index 0 (the fleet's override model, `Presets.h`); row 1 is
+  the constructor's defaults and `--presets` holds them together. **Fuel**
+  tops the ball's footprint back up.
 - **Curvature g_eff scales with T / T_ball**; the drive's stream function is
   windowed about the ball.
 - **GLSL `tanh` returns NaN past |x| ≈ 44 here**; clamp its argument.
@@ -60,6 +77,7 @@ floors or the dual-energy switch.
 - All host parameters are 0..1 and mapped in `Controls.cpp`; option
   parameters hold the element value; events act on the rising edge.
 - `containment_core` is an OBJECT library; override `SetTextParameter`.
+- The display name and id are `kDisplayName` / `kPluginCode` in `Controls.h`.
 - Local repo only: no remote, no tag, not registered on the website.
 
 ## Not done yet

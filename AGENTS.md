@@ -61,12 +61,20 @@ or a pellet the plan is made from a synchronous readback.
 ## The bottle
 
 - **Coils**: N line currents of alternating sign on a circle of radius
-  R_c ≥ 1.05× the frame's half-diagonal, normalised so |B| at radius 0.5 in
+  R_c ≥ 1.05× the grid's half-diagonal (Open's margin included, so no coil
+  is ever inside the simulated plasma), normalised so |B| at radius 0.5 in
   the first gap is Field. Plus a uniform guide Bz. The closed form is written
   in `Physics.cpp` and in the shader, both marked `//= mirrored`.
-- **Open**: the ghost's plasma is zero-gradient but never below the ambient
-  background. Its field is B_vac(ghost) + (B − B_vac)(the cell it copies).
-  ψ leaves.
+- **Open**: a window onto a bigger bottle. The grid carries a margin all
+  round the frame, 0.1 frame heights deep (`kMarginFraction`), simulated and
+  never shown. In it the plasma is relaxed towards the ambient plasma at rest
+  in the coils' own field, at a rate rising as depth² (`kSpongePower`), sized
+  so the fastest wave (c_h) loses 6 e-foldings crossing it (`kSpongeEFolds`).
+  The relaxation is exact for the step, so no rate is too stiff. Beyond the
+  margin the ghost is zero-gradient but never below the ambient, its field
+  B_vac(ghost) + (B − B_vac)(the cell it copies); ψ leaves. The coils' slow
+  changes are carried through the volume, as under Wall. The ball's X / Y and
+  the clip are the frame's; the margin reads the clip's edge.
 - **Wall**: the plasma is mirrored with the whole velocity reversed (no
   slip). The field is B_vac(ghost) plus the mirrored cell's perturbation. The
   flux pass zeroes the mass, energy, picture, entropy and all B fluxes through
@@ -82,7 +90,7 @@ or a pellet the plan is made from a synchronous readback.
   force is the curl of the windowed stream function, so it is
   divergence-free exactly.
 
-**Default: Wall, guide field 1.4 × Field, Field 0.5, six poles.** The guide
+**Default: Wall, guide field 1.4 × Field, Field 0.5, six poles, Fuel 0.3.** The guide
 field confines the ball and the cusp shapes it. Two reasons. With the cusp
 alone, the ball drains through the cusps within about 1.5 τ_A (correct
 physics, but no orb). And the cusp field at the frame's corners, 4–7× Field,
@@ -143,16 +151,17 @@ added through the volume instead.
 scheme's truncation error in B²/2 exceeds p where β ≈ 10⁻³. There p comes
 from the entropy K, advected as a passive scalar (Ryu et al.; Balsara &
 Spicer). Energy decides everywhere else and resynchronises K, so shocks heat
-as they should. On the default look 58% of cell-steps take the entropy branch
-(the background), and floors then fire on 7×10⁻⁶ of cell-steps.
+as they should. On the default look 56% of cell-steps take the entropy branch
+(the background), and the floors then fire on none (7×10⁻⁶ before the 2026-09-24 build).
 
 **The open boundary drains the background.** A zero-gradient ghost lets the
 tenuous plasma stream out along field lines that cross the edge, leaving
 β ≈ 0 holes that only the floors held up (millions of clamps, then a
-runaway). The ghost now never holds less than the ambient background. Open
-is still not indefinitely stable: on the default look it runs away after
-about 3 τ_A as |B| climbs at the edges (see What is not done). A pure-vacuum
-field ghost is worse: NaN by t = 4.5.
+runaway). The ghost then held no less than the ambient background, and Open
+still ran away after about 3 τ_A as |B| climbed at the edges (28.6× the
+coils' own field by 20 τ_A, `--negative`'s "open"). A pure-vacuum field ghost
+was worse: NaN by t = 4.5. What holds is the absorbing margin (above): 20 τ_A
+of the default look with |B| never past the coils' own field, and no floors.
 
 **Uniform g_eff stratifies the background.** A radial gravity of fixed size
 also acts on the cold background, whose scale height T_bg / g is short. It
@@ -181,6 +190,67 @@ so ∂A/∂r = −B_φ = 0 and a multipole's A is 0. The lines came out infinite
 close, every pixel lit, and Field Line Count was dead (the sweep found it).
 The span is now the largest |A − A_centre| round the circle. Lines closer
 than two pixels fade.
+
+**A released ball fingers, and the marker's half-contour is not its edge.**
+This is what turned `--balance` red at Detail 512 (4.5 cells against a
+bound of 3), and it was the check, not the physics. The top-hat ball is let
+go out of balance and rings; while its edge decelerates it is
+Rayleigh–Taylor unstable (a dense ball, a tenuous background, k across B, so
+no tension holds it), seeded by the Cartesian grid on the axes. At 512 the
+edge is resolved well enough to finger: the second moment of the marker's
+> 0.5 region, over a disc's, grew steadily from 1.000 to 1.117 over 8 τ_A. In the
+mixed layer a cell half ball by MASS is only ρ_out / (ρ_in + ρ_out) ≈ 13%
+ball by volume, so the half-contour counts the layer and runs outwards. The
+absorbing margin made it worse, correctly: the old ghost sent the first fast
+wave back within 0.2 τ_A and cushioned the overshoot (the edge reached
+0.1878 instead of 0.1944). The edge is now the ball's VOLUME, M / ρ_core: at
+pressure balance the ball's plasma, in the core and in any finger, sits on
+the core's adiabat with the core's Bz / ρ, so it has the core's density
+everywhere. That lands 0.03 and 0.09 cells from flux conservation. The core
+also heats by 2–3% in entropy during the ring-down (the compressions converge
+on the axis), so an adiabatic prediction of the edge misses by 0.2–0.5
+cells, past what the ringing allows it; the entropy is printed, the
+adiabatic edge is not asserted.
+
+**The absorbing layer relaxes towards the plugin's ambient plasma**, so any
+check that loads a different plasma under Open gets a Riemann problem at the
+frame's edge. `--resist` (ρ 100, p 1000) read a peak of −0.996 against 0.025;
+it runs in a Wall now.
+
+**|B| over the grid swings 2× as the coils turn past its corners.** The
+margin puts the grid's corners within a few hundredths of the coil circle.
+`--open` compared |B| with its value at the start and failed on the coils'
+own field (5.4 against 2.6, periodically). It now compares with the coils'
+own peak at the same moment: 1.00 throughout.
+
+**A plane pulse is the wrong probe of an absorbing layer.** It runs ALONG the
+top and bottom margins too, the layer damps it there as it should, and the
+step that leaves diffracts into the frame (2.4% of it, sitting by the top and
+bottom edges with a transverse velocity). Nothing the ball sends out runs
+along an edge from outside the frame. The probe is a cylindrical wave from
+the centre, differenced cell for cell against the same frame inside an
+unbounded plasma.
+
+**The layer echoes a low-frequency oblique wave by ~12%, and so did the
+zero-gradient ghost.** A relaxation layer does not reflect a wave meeting it
+square on (every characteristic is damped alike); at a slant its impedance
+changes and it does. Depth barely helped (0.2 frame heights: 4–5%; 0.3:
+2–4%) and costs cells. What differs is what happens next: the old ghost kept
+9.3% of the wave in the frame two crossings later, the layer 0.74%.
+
+**A bilinear resample conserves a sum only at integer upsampling.** `--glow`'s
+raster half held to 10⁻⁴ at 512² on a 256² grid, and read 0.999874 at
+320x180, where the grid is sampled DOWN and whole cells are skipped. Its
+bound is now the resampler's own ripple where the light is, computed on the
+CPU for the two sizes, with the grid no bigger than the raster.
+
+**Apple's software renderer is ~50 s a frame at the default Detail.**
+`CT_RENDERER=software` forces it here; `--state` took 2.5 minutes and the
+Alfvén wave at Detail 128 read exactly what the GPU reads (0.70762, 0.054%).
+The physics and the sweep cannot run in CI on it.
+
+**`--dump-shaders` into a missing directory said "wrote 14 programs".**
+`std::ofstream` fails silently; it now checks and exits 1.
 
 **Harness traps that looked like physics bugs:**
 - a loaded state has no signal speeds, so dt came out infinite: a load now
@@ -219,9 +289,9 @@ the output raster. Each prints the numbers it compared.
 | `--alfven` rotation | 0.02 rad, correlation < −0.99 | an exact solution; a quarter turn either way is O(1) |
 | `--alfven` order | ≥ 1.5 | MC clips each extremum to first order, so the global order of a smooth wave is between 1.5 and 2 |
 | `--conserve` | 3 u × substeps, u = 2⁻²⁴ | each substep rounds each cell's value ~3 times by ≤ u of itself; summed over cells that is 3u of the total (the cell count cancels), linear over steps |
-| `--divb` | max 0.1, rms 0.01 of \|B\|/Δx | O(1) is a monopole a cell across; GLM holds it to truncation level. Measured max 0.055 / 0.084 at Detail 128 / 256; with GLM off 0.060 / 0.21 -- **only Detail 256 tells them apart**: on a 128 grid this run's field is smooth enough that the scheme's own divergence stays small either way |
+| `--divb` | max 0.1, rms 0.01 of \|B\|/Δx | O(1) is a monopole a cell across; GLM holds it to truncation level. Measured max 0.028 / 0.024 at Detail 128 / 256; with GLM off 0.20 / 0.15 |
 | `--balance` pressure, Bz | max ρv² / p_total + 0.5% | residual ringing is balanced by ρ dv/dt ~ ρv²/L; half a percent for the edge's own width |
-| `--balance` edge | 3 cells | the edge from the marker's area against flux conservation |
+| `--balance` edge | 1 cell | the ball's volume radius, √(M / π ρ_core), against flux conservation, r₀ √(Bz₀ / Bz_core). A fast wave across B moves Bz and ρ in proportion, so the ringing leaves Bz/ρ alone; the only plasma the core does not describe is what the ignition's tanh edge (half-width 0.75 cells) laid down part-mixed, less than a cell's width of the ball |
 | `--balance` β = 1 | inside the edge layer ± 1 cell | β = 1 lies where 2p = B², inside the layer between marker 0.9 and 0.1 |
 | `--rt` rate | (kL/2) gkA/γ² + g/(k c_s²) + 2%, L = 2 cells | a diffuse interface weakens only the buoyancy term; plus compressibility and the fit |
 | `--rt` stable | peak < 2× the seed | the unstable cases reach > 20× in the same time |
@@ -231,10 +301,15 @@ the output raster. Each prints the numbers it compared.
 | `--quench` front | 2Δx / Δt | the front found to a cell at each end |
 | `--quench` decay | 10⁻⁶ of the field | the plugin's product of per-frame decays is exp(−Σ dt / τ_q) exactly |
 | `--resist` | 1% | the 5-point Laplacian on a Gaussian 20 cells wide is (Δx/w)²/12; the compression is 10⁻⁵ |
-| `--floors` | < 10⁻⁴ of cell-steps | "rarely" made a number; the default look measures 7×10⁻⁶ |
+| `--floors` | < 10⁻⁴ of cell-steps | "rarely" made a number; the default look measures 0 |
+| `--open` echo | what remains two frame crossings after the first echo left < (first echo)² | each further echo is at most the first's fraction of the one before; one factor of margin. The first echo is printed (11.6%), not bounded |
+| `--open` long run | \|B\| < 2× the coils' own peak at that moment; floors < 10⁻⁴; ρ > 0.1 ρ_ambient; emission > ¼ of settled; 20 τ_A | a runaway passes 2× in a few τ_A (the old ghost: 28.6×); the rest are `--floors`' bound and "the ball is still there" |
 | `--still` | bit for bit | `texelFetch` of the input at Mix 0 |
 | `--glow` grid | 6 × 233 u | sums of up to 233 products, two passes a stage, three stages |
-| `--glow` raster | 10⁻⁴ | at a raster exactly twice the grid, bilinear resampling keeps a sum |
+| `--glow` raster | the resampler's ripple + 20 u | for each texture, the pixels' summed bilinear weight on each cell against its mean, plus 2⁻⁹ a pixel where the filter's fraction is not a multiple of 1/256 (GL leaves sub-texel precision to the implementation), weighted by where the light is; computed on the CPU for the two sizes. 1.2×10⁻⁶ at 512² (exactly twice the grid), 0.35 at 320x180 -- still far inside the 0.6 an additive bloom adds |
+| `--reference` (offline) | 4 cells of 8192 + 0.002 | a head found at 0.1% of the jump; a rarefaction head is a kink that minmod smears over √(c Δx t / 2) = 0.0033 |
+| `--vacuum` (offline) | div B, J_z < Σ_k \|I_k\| (2h²/(d_k−h)⁴ + 2N u/(h d_k)); growth r^(N/2−1) to 4N(0.1/R_c)^N; \|B\|(0.5) = Field to 10⁻¹²; N cusps | the central difference's truncation (a line current's third derivative is 6\|I\|/d⁴) and rounding; the coils' next multipole term |
+| `--names` (offline) | exact | unique parameter names; the display name ≤ 16 bytes with the fleet's prefix |
 
 **The Brio–Wu reference.** The published solution exists as plots, not a
 table, and there is no network here. The reference is computed by the
@@ -244,51 +319,136 @@ cells. Its two fast-rarefaction heads are checked against the closed-form
 fast speeds of the initial states (0.3195 vs 0.3208, 0.8686 vs 0.8684). Its
 plateaus, ρ = 0.696 and 0.235, are the familiar published values.
 
+## Would this hold on another rasteriser, at another raster?
+
+`tools/verify.sh` runs every GL check twice: at the raster the check asks for,
+and with every rig at 320x180, CI's (`--size 320x180`). Under `--size` the
+grid keeps the aspect the check asked for, so a physics check runs on the
+same cells at both and only the light's path to the raster changes; the two
+passes print the same physics numbers. `CT_RENDERER=software` forces Apple's
+software renderer, a different rasteriser, on this Mac.
+
+| check | raster dependence | another rasteriser |
+| --- | --- | --- |
+| `--briowu` | none: the grid is Detail cells, the tube 1-D along a square box's axis; same numbers at 320x180 | texelFetch and float arithmetic only; no filtered sample in the solver |
+| `--alfven` | none; same at 320x180 | **run on the software renderer**: Detail 128 read 0.70762 and lost 0.054%, digit for digit the GPU's |
+| `--conserve` | none; same at 320x180 | sums of state texels read back in double; the bound is float rounding per substep, any IEEE float32 target |
+| `--divb` | none | as `--conserve` |
+| `--balance` | none; same at 320x180 | radial means of state texels; no raster enters |
+| `--rt` | none | the fit is on state texels |
+| `--cusp` | none | the histogram is of state texels on a circle, binned on the CPU |
+| `--frozen` | none | correlation of state texels |
+| `--quench` | none | the front from state texels; the coils' decay is CPU double |
+| `--resist` | none | one state texel against a closed form |
+| `--floors` | the default look at 320x180 either way | counts from the GPU's own flags; a rasteriser with other float slack could move the count, not past 10⁻⁴ |
+| `--open` | none (the probe's grid is its own) | state texels differenced between two runs on the same GPU: any systematic of the rasteriser cancels |
+| `--still` | 480x270 and 1280x720, and 320x180: bit for bit at all three | `texelFetch` of the input and a return: no arithmetic on the path, exact on any GPU |
+| `--glow` grid | the emission grid's, not the raster's | normalised kernels in float: 6 × 233 u covers any IEEE float32 target |
+| `--glow` raster | 512² (1.2×10⁻⁶) and 320x180 (0.35): the bound is computed per size | the filter's sub-texel precision is in the bound (2⁻⁹ per pixel off a 1/256 step) |
+| `--state` | 320x180 both passes | **run on the software renderer**: passes; state, not pixels |
+| `--mutation` | runs `--briowu` and `--alfven` | as those |
+| `--reference`, `--vacuum`, `--names`, `--presets` | CPU only (`--offline`) | no GPU at all |
+
+Deliberately not relied on: exact cancellation (`--glow`'s bound carries
+rounding even where the resample is exact), `pow( 1.0, 1.0 ) == 1.0`, and
+`tanh` past |x| ≈ 44 (clamped; see the traps).
+
+## The recorded mutations
+
+Two, both proving the harness drives the shaders the plugin compiles.
+
+- **In the harness, every run** (`--mutation`): the monotonised-central
+  slope's `0.5 * abs( l + r )` becomes `0.5 * abs( l - r )`, through the
+  plugin's own shader assembly (`SetShaderMutationForTest`). `--briowu` fails
+  10 assertions (waves 12–18 cells off, the contact 16 cells wide) and
+  `--alfven` 1 (the amplitude converges at order 0.96). The check asserts the
+  text is in 3 shipped programs, so a rename cannot make it vacuous.
+- **By hand, once, 2026-09-24**: in `Shaders.cpp`'s `fastSpeed()`,
+  `float a2  = Gamma * p / r;` became `Gamma * p * r` (one character), and
+  the build ran the checks. `--quench` failed 2 (the front never left: 0.0000
+  against the exact shock's 3.2154, and the ball's area went to 0). `--briowu`
+  and `--alfven` PASSED: a wrong sound speed only widens HLLD's wave-speed
+  estimates, which makes the scheme more diffusive but still consistent, and
+  Brio–Wu's positions sit inside their 3 cells. Reverted by copying the file
+  back; `git diff` empty; `--briowu` passes again.
+
 ## Decisions taken without asking
 
 - **HLLD**, float, no fallback needed.
 - **2.5-D field lines are in-plane only.** A guide-field-only bottle has none,
   correctly.
-- **Wall is the default boundary**, and the coils' changes are carried
-  through the vessel volumetrically. This goes beyond the spec, which asks
-  for "re-imposed at the boundary"; Open does exactly that.
+- **Wall stays the default boundary; Open is sound but dearer** (decided
+  2026-09-24). The unfinished work had made Open the default. With the
+  absorbing margin Open now holds the default look for 20 τ_A with the field
+  never past the coils' own, but the default look under Open costs 13–16 ms
+  a frame at 1080p against Wall's 8: the margin adds a third more cells, and
+  its corners sit near the coils, where the field sets a shorter step (29
+  substeps a frame against 22). The spec asks the default to hold 60 fps at
+  1080p with headroom, and 83–95% of the frame is not headroom. So Clip Orb,
+  Green Orb, Guide Field Bubble and Rayleigh-Taylor are Wall; Cusp Leak and
+  Quench Fireball, where what leaves should leave, are Open. Under both the
+  coils' changes are carried through the volume, which goes beyond the spec's
+  "re-imposed at the boundary".
+- **The margin is 0.1 frame heights, 6 e-foldings, rate ∝ depth².** Deeper
+  margins echo less (0.2: ~5%, 0.3: ~3%) and cost cells on every frame; what
+  the release needs is that the echo leaves, and it does at 0.1.
+- **`--balance`'s edge is the ball's volume, not the marker's half-contour**,
+  and its tolerance is one cell, derived. The half-contour is printed beside
+  it so the mixed layer stays visible.
+- **The Preset dropdown** (index 0, the fleet's override model; `Presets.h`):
+  Custom, then Clip Orb (= the constructor's defaults, held by `--presets`),
+  Green Orb, Guide Field Bubble, Cusp Leak, Rayleigh-Taylor, Quench Fireball.
+  Choosing a row re-ignites.
+- **Fuel** (0–2 per τ_A, default 0.3): a steady gas puff that tops the ball's
+  footprint back up towards its ignition profile. It only adds, at rest, so it
+  holds a leaking ball up without pinning it. It has no physics check of its
+  own (it is a source, like Feed); the sweep holds it live, and `--open`'s
+  long run is of the fuelled default.
+- **CI runs what a GPU-less runner can**: `--offline`, glslc, and `--state` at
+  320x180 under `--allow-no-gl`. The physics and the sweep run in `verify.sh`.
 - **The background is ρ = 0.1, p = 0.005.** It is tenuous enough to emit
   ~0.2% of the ball's light, and dense enough that v_A (and the step) stays
   sane. The floors are ρ 10⁻⁴ and p 10⁻⁶.
 - **Temperature is β against B_ref, not against Field**, so Field confines
   the same ball harder rather than rescaling everything.
 - **Speed is Alfvén crossings (at B_ref) per second**, default 0.3.
-- **The Green Orb is a preset file** (`docs/green-orb.preset`), not an option
-  parameter. The defaults are the same bottle with the clip's own colours.
+- **The Green Orb is a Preset row and a preset file** (`docs/green-orb.preset`,
+  for `cttest --preset`). The defaults are the same bottle with the clip's own
+  colours.
   Aurora is named for the oxygen line, and nothing refers to the inspiration.
 - **Events land on frames**; Quench is a boolean (latching) and the coils
   come back when it is released.
 - **Provisional About/ATTRIBUTIONS** hand copies with `guide = ""`, as in the
   rest of the unreleased tranche.
-- **The display name is `SW Containment`** (14 characters), per the spec.
+- **The display name is `SW Containment`** (14 characters), per the spec,
+  written once (`kDisplayName` in `Controls.h`) so `--names` can hold it to 16
+  bytes; `oxbow probe` reads the bundle's copy.
 
 ## What is genuinely verified, and what is assumed
 
-Verified on this machine: every check above, all 13 negative controls
-detected, the mutation detected by two checks, the sweep (31 parameters
-live), `verify.sh` green on a fresh universal build (`lipo` shows both
-slices, `oxbow probe` reads `SW Containment` / `CT01` / effect).
+Verified on this machine (2026-09-24, M4 Max, macOS 26.4): every check above,
+at each check's own raster and at 320x180; all 18 negative controls detected
+(3 of them offline); the in-harness mutation caught by two checks and the
+hand mutation by one; the sweep (33 parameters live); the pipe; `verify.sh` green (47 steps) on a fresh
+universal build (`lipo` shows both slices, `oxbow probe` reads
+`SW Containment` / `CT01` / effect). On Apple's software renderer: `--state`
+and `--alfven` only.
 
 Not verified, or not done:
 
 - **Never loaded into Resolume.** Never built or run on Windows, and never
   run on another GPU. The x86_64 slice has never executed.
-- **Open is not indefinitely stable.** The default look under Open runs away
-  after about 3 τ_A (about 10 s at the default Speed): field builds at the
-  edges and the floors fire. Short events (a quench fireball, a few seconds
-  of cusp jets) are fine. Wall is the default for this reason.
+- **Open echoes ~12% of a low-frequency wave once**, as the zero-gradient
+  ghost did; the echo then leaves. The long run is 20 τ_A (~70 s at the
+  default Speed), not an evening.
 - **The dual-energy switch and EGLM are not conservative.** With a cusp, the
   total energy drifts 2×10⁻³ over 600 frames of Wall. The guide-field bottle,
   where neither engages, conserves to 3×10⁻⁷.
-- **The GLM energy term, the carried coil change and the T-scaled curvature
-  are modelling choices** stated above, not textbook ideal MHD.
+- **The GLM energy term, the carried coil change, the T-scaled curvature, the
+  absorbing margin and Fuel are modelling choices** stated above, not
+  textbook ideal MHD.
 - **Resolume's FFT bins** are assumed to be what rosette assumed.
-- **The GPU-less CI runner** would need a software GL; `verify.sh` runs a few
-  minutes here.
+- **CI has never run** (no remote). Its steps were run here by hand.
 - **Stretch goals not attempted**: the tokamak view and the "Over"
-  registration. OpenFX port and browser demo: not required for 0.1.0.
+  registration. OpenFX port, browser demo and user guide: not required for
+  0.1.0.

@@ -10,13 +10,15 @@
 > an oblique Alfvén wave as B/√ρ to **0.02%**. `--rt` measures magnetic
 > Rayleigh–Taylor growth rates against γ² = gkA − 2(k·B)²/(ρ₁+ρ₂) to
 > **0.4–0.7%**. `--balance` finds the diamagnetic bubble's total pressure flat
-> to **0.003%**. `--cusp` finds the leaks at the cusp angles the coils predict,
+> to **0.02%** and its edge within **0.1 cells** of where flux conservation
+> puts it. `--open` finds the absorbing boundary lets an echo leave and holds
+> the default look for 20 Alfvén times. `--cusp` finds the leaks at the cusp angles the coils predict,
 > for 4, 6 and 8 poles and with the coils turning. `--conserve` holds mass and
 > energy to round-off. `cttest --negative` re-runs every check against a
 > deliberately wrong model and fails if any of them passes, and `--mutation`
 > changes one character of a shipped shader and requires the checks to notice
-> (see [Status](#status)). A control sweep fails if any parameter turns out to
-> do nothing.
+> (see [Status](#status)). Every check runs at two output rasters, its own and
+> 320x180. A control sweep fails if any parameter turns out to do nothing.
 
 A ball of plasma in a magnetic bottle, for Resolume Arena/Avenue, as an FFGL
 effect. The clip is what the plasma is made of. It swells against the field,
@@ -68,22 +70,31 @@ What falls out of that, rather than being arranged:
   moves at the speed of the exact Riemann solution and never faster than the
   vacuum escape speed 2c_s/(γ−1).
 - **Fuel.** A Pellet drops cold, dense plasma into the middle, and the ball
-  has to share its motion with it.
+  has to share its motion with it. A steady Fuel puff keeps a leaking ball
+  topped up, so an open bottle does not simply run down.
 
 ## Controls
 
+- **Preset:** Custom, or one of six whole bottles: Clip Orb (the defaults),
+  Green Orb, Guide Field Bubble, Cusp Leak, Rayleigh-Taylor, Quench
+  Fireball. A preset lays its values over the controls it owns (the
+  inspector keeps showing the operator's own), and choosing one re-ignites.
 - **Ball:** Ignite lays down a fresh ball of the given size and position.
   Temperature is its β against the reference field, 0.1 to 50. Profile is
   Gaussian or top hat. Pellet adds cold fuel. Feed is how fast the live clip
   keeps flowing into the ball's footprint (at 0 the ball keeps the frame it
-  was lit with). Clip Heats: bright parts of the picture push harder.
+  was lit with). Clip Heats: bright parts of the picture push harder. Fuel
+  tops the ball's footprint back up with fresh gas, so a leaking ball is
+  held up rather than running down.
 - **Bottle:** Field is the cusp's strength at the frame's inscribed circle.
   Guide Field is the uniform axial field, as a multiple of Field. Poles is 0,
   4, 6, 8 or 12 line currents of alternating sign. Coil Radius, Coil Spin
   (the coils turn slowly, and the plasma has to follow), Curvature (the
   "decompose" knob), and Quench (the coils let go, and come back when
-  released). Boundary: *Wall* is a perfectly conducting vessel that nothing
-  crosses; *Open* is a window onto a bigger bottle, where what leaks leaves.
+  released). Boundary: *Wall* (the default) is a perfectly conducting vessel that
+  nothing crosses; *Open* is a window onto a bigger bottle, where what leaks
+  leaves (Cusp Leak and Quench Fireball use it). Open simulates a hidden margin
+  round the frame and costs more: see the table below.
 - **Plasma:** Speed is Alfvén crossing times per second (0 freezes it).
   Resistivity lets the field diffuse into the ball, a slow containment
   failure. Cooling: bremsstrahlung losses, so a ball dims and shrinks.
@@ -108,7 +119,7 @@ diagnostics log says so.
 
 ## Status
 
-**v0.1.0, 2026-09-23, and honestly early.**
+**v0.1.0, 2026-09-24, and honestly early.**
 
 It has **never been loaded into Resolume**. `oxbow probe` reads the bundle
 the way a host does and finds `SW Containment` / `CT01` / effect. Nothing
@@ -121,47 +132,50 @@ What is measured, on this machine:
 | --- | --- |
 | Brio–Wu | along x and y, at Detail 256 and 512: every wave within **0.8 / 0.2 cells** of a double-precision reference (a different solver, 8192 cells, whose fast heads match the closed form); plateaus within **1.25% / 0.14%**; the contact **4 cells** wide (HLL makes it 6) |
 | Alfvén wave | circularly polarised, oblique, ρ = 2: speed B/√ρ to **0.07% / 0.02%**; B⊥ a quarter turn from Bz and v anti-parallel to it; amplitude loss converging at order **3.2** |
-| conservation | Wall, 600 frames: mass to **1.5×10⁻⁷**, energy to **3×10⁻⁷** (round-off bound 6×10⁻⁴) |
-| ∇·B | turbulent run: max \|∇·B\|Δx/\|B\| **0.08**, rms **0.002** at Detail 256; **0.21** with GLM off |
-| balance | the diamagnetic bubble: p + B²/2 flat to **0.003%**; Bz inside = √(B₀² + 2p_out − 2p_in) to **0.004%**; the edge **1.1 cells** from where flux conservation puts it; β = 1 inside the edge layer |
+| conservation | Wall, 600 frames: mass to **4.5×10⁻⁸**, energy to **5.4×10⁻⁶** (round-off bound 4.6×10⁻⁴) |
+| ∇·B | turbulent run: max \|∇·B\|Δx/\|B\| **0.024**, rms **0.0006** at Detail 256; **0.15** with GLM off |
+| balance | the diamagnetic bubble: p + B²/2 flat to **0.02%**; Bz inside = √(B₀² + 2p_out − 2p_in) to **0.02%**; the edge (the ball's volume) **0.03 / 0.09 cells** from where flux conservation puts it, at Detail 256 / 512; β = 1 inside the edge layer. The released ball's edge fingers (Rayleigh–Taylor while it rings), which is why the edge is measured by volume |
 | Rayleigh–Taylor | B ⊥ k: **0.44%** from √(gkA) at Detail 512; B along the interface below cut-off: **0.66%**; above it: does not grow |
-| cusp leaks | N = 4, 6, 8: the leaks within **0.7°** of the predicted cusp angles; with the coils turning they follow (**1.9°**, where the unturned angles miss by 8°) |
+| cusp leaks | N = 4, 6, 8: the leaks within **0.4°** of the predicted cusp angles; with the coils turning they follow (**1.9°**, where the unturned angles miss by 8°) |
 | frozen flux | Bz/ρ against the tracer carried with the mass: correlation **0.9987** |
 | quench | front speeds against the exact Riemann shock within **2 cells**, never above escape speed; the coils decay as exp(−t/τ_q) exactly |
-| resistivity | a field bump diffuses as the diffusion equation says to **0.07%** |
-| floors | fire on **7×10⁻⁶** of cell-steps on the default look; without them a Mach 30 double rarefaction blows up |
+| resistivity | a field bump diffuses as the diffusion equation says to **0.06%** |
+| the open boundary | a cylindrical wave leaves: its one echo (~12%, as the old boundary's) is gone two crossings later to **0.7%**, where the old boundary kept 9%; the default look runs 20 Alfvén times with \|B\| never past the coils' own field (the old boundary: 29×) |
+| floors | fire on **none** of the default look's cell-steps; without them a Mach 30 double rarefaction blows up |
 | the light | Mix 0 is the input **bit for bit**; each glare stage holds the emission's light to **10⁻⁸** |
 | GL state | viewport, vertex array, program, units, framebuffer, blend, scissor, clear colour all as the host left them |
-| negative controls | **13** deliberately wrong models, **all 13** detected; a one-character change to the shipped limiter fails two checks |
-| dead controls | **31** parameters, all live |
+| negative controls | **18** deliberately wrong models, **all 18** detected; a one-character change to the shipped limiter fails two checks |
+| two rasters | every check at its own raster and at 320x180; the physics reads the same numbers at both, and the Alfvén wave the same on Apple's software renderer |
+| dead controls | **33** parameters, all live |
 
 Render cost (`cttest --bench`, the default look), ms per frame:
 
 | Detail | 720p | 1080p | 4K |
 | --- | --- | --- | --- |
-| 128 | 3.1 | 3.3 | 3.4 |
-| 256 (default) | 7.6 | 7.8 | 8.1 |
-| 512 | 53 | 51 | 64 |
-| 1024 | 204 | 473 | 213 |
+| 128 | 3.5 | 3.3 | 3.4 |
+| 256 (default) | 8.1 | 8.1 | 8.4 |
+| 512 | 58 | 54 | 55 |
+| 1024 | 205 | 209 | 215 |
 
 The grid, not the raster, sets the cost: the default holds 60 fps at 1080p
-with half the frame to spare (about 22 substeps a frame). Detail 512 and 1024
-are not real-time here; at 1024 the 48-substep cap also bites, so simulated
-time runs slow as well. The 473 ms at 1024/1080p is one run, against 204 and
-213 either side of it; it was not re-measured.
+with half the frame to spare (22 substeps a frame). Detail 512 and 1024 are
+not real-time here; at 1024 the 48-substep cap also bites, so simulated time
+runs slow as well. Open costs more than Wall: its hidden margin adds a third
+more cells and puts the grid's corners near the coils, so the default look
+under Open measured 13–16 ms at 1080p. That is why Wall is the default.
 
 What is **not** verified, and is the honest limit of this release:
 
-- **Open is not indefinitely stable.** The default look under Open is sound
-  for about 3 Alfvén times (10 s at the default Speed), then field builds at
-  the edges and the run degrades. It is fine for a quench fireball or a few
-  seconds of cusp jets. Wall, the default, is stable.
+- **Open echoes once.** About 12% of a slow wave meeting the edge at a slant
+  comes back before it leaves, as it did before the absorbing margin. The
+  long run that shows Open holding is 20 Alfvén times, not an evening.
 - **Some terms are modelling choices, not textbook ideal MHD.** The
   low-β background takes its pressure from an entropy equation (a
   dual-energy switch), and GLM's cleaning gives back the magnetic energy it
   changes. With a cusp, total energy therefore drifts by 0.2% over 600
-  frames. With Wall, the coils' slow changes are carried through the vessel
-  rather than diffusing in from its surface. Curvature's gravity scales with
+  frames. The coils' slow changes are carried through the vessel rather than
+  diffusing in from its surface, and Open's margin relaxes towards a still
+  ambient plasma. Fuel is a source term. Curvature's gravity scales with
   temperature. AGENTS.md says why each is there.
 - **2.5-D.** Nothing varies along the axis: no kinks, no sausage modes, no
   tokamak.
@@ -199,6 +213,8 @@ The offline harness renders the real plugin class headlessly:
     ./build/cttest --glow          the glare makes no light
     ./build/cttest --state         the host's GL state comes back
     ./build/cttest --mutation      the harness drives the shipped shader
+    ./build/cttest --open          the boundary: the echo leaves, the long run holds
+    ./build/cttest --offline       the checks that need no GL (names, presets, reference, coils)
     ./build/cttest --negative      every check above, against a wrong model
     ./build/cttest --bench         720p through 4K, every Detail
     python3 tools/sweep.py         no control is silently dead
