@@ -740,10 +740,9 @@ void ContainmentPlugin::Substep()
 		uniform1f( p, "GLMAlpha", kGLMAlpha );
 		uniform1i( p, "UseEntropy", test.entropy ? 1 : 0 );
 		uniform1f( p, "EntropySwitch", kEntropySwitch );
-		static const float efolds = std::getenv( "CT_EF" ) ? std::atof( std::getenv( "CT_EF" ) ) : kSpongeEFolds;
-		static const float power  = std::getenv( "CT_PW" ) ? std::atof( std::getenv( "CT_PW" ) ) : 2.0f;
+		const float efolds = test.spongeEFolds >= 0.0f ? test.spongeEFolds : kSpongeEFolds;
 		uniform1f( p, "SpongeEFolds", grid.ox > 0 ? efolds : 0.0f );
-		uniform1f( p, "SpongePower", power );
+		uniform1f( p, "SpongePower", kSpongePower );
 		BoundTextures bound( { s.Texture( 0 ), s.Texture( 1 ), s.Texture( 2 ), s.Texture( 3 ), star.Texture( 0 ),
 		                       star.Texture( 1 ), clock[ clockIndex ].TextureID(), fluxX.Texture( 0 ), fluxX.Texture( 1 ),
 		                       fluxX.Texture( 2 ), fluxX.Texture( 3 ), fluxY.Texture( 0 ), fluxY.Texture( 1 ),
@@ -1184,10 +1183,13 @@ FFResult ContainmentPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 	//round the frame, never shown, holding the absorbing layer.
 	const int boundaryNow = test.boundary >= 0 ? test.boundary
 	                                           : optionIndex( P( PT_BOUNDARY ), static_cast< int >( Boundary::Count ) );
+	const float marginFraction = test.marginFraction >= 0.0f ? test.marginFraction : kMarginFraction;
 	const int margin  = boundaryNow == static_cast< int >( Boundary::Open ) && !test.legacyOpen
-	                        ? static_cast< int >( std::lround( ( std::getenv( "CT_MG" ) ? std::atof( std::getenv( "CT_MG" ) ) : kMarginFraction ) * kDetailCells[ detail ] ) )
+	                        ? static_cast< int >( std::lround( marginFraction * kDetailCells[ detail ] ) )
 	                        : 0;
-	const Grid wanted = ChooseGrid( width, height, kDetailCells[ detail ], margin );
+	const Grid wanted = gridRasterW > 0 && gridRasterH > 0
+	                        ? ChooseGrid( gridRasterW, gridRasterH, kDetailCells[ detail ], margin )
+	                        : ChooseGrid( width, height, kDetailCells[ detail ], margin );
 	if( !EnsureBuffers( width, height, wanted ) )
 	{
 		diag::error( "could not allocate the plasma's buffers" );

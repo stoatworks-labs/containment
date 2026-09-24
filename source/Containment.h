@@ -38,6 +38,8 @@ struct TestModel
 	bool uniformGravity = false;///< g_eff not scaled by T / T_ref (the textbook RT slab)
 	bool additiveGlow   = false;///< the glare ADDED rather than moved (the wrong model)
 	bool legacyOpen     = false;///< Open as it was: no margin, no absorbing layer (the wrong model)
+	float marginFraction = -1.0f;///< >= 0: Open's margin, as a fraction of the frame height (else kMarginFraction)
+	float spongeEFolds   = -1.0f;///< >= 0: the absorbing layer's e-foldings (else kSpongeEFolds; 0 is no layer)
 	float backgroundDensity  = kBackgroundDensity;
 	float backgroundPressure = kBackgroundPressure;
 };
@@ -80,6 +82,14 @@ public:
 	void SetModelForTest( const TestModel& model )
 	{
 		test = model;
+	}
+	/// The grid's aspect from this raster, not the output's: a check's box
+	/// stays the box it was written for whatever raster the check renders at
+	/// (`cttest --size 320x180`). 0 x 0: the output's, as in a host.
+	void SetGridRasterForTest( int width, int height )
+	{
+		gridRasterW = width;
+		gridRasterH = height;
 	}
 
 	/// A parameter's effective value: the operator's, or the preset's where
@@ -209,6 +219,7 @@ private:
 
 	float params[ PT_COUNT ] = {};
 	TestModel test;
+	int gridRasterW = 0, gridRasterH = 0;///< SetGridRasterForTest
 
 	ffglex::FFGLShader programs[ static_cast< int >( Program::Count ) ];
 	ffglex::FFGLScreenQuad quad;

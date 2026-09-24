@@ -37,6 +37,12 @@ namespace containment
     ids, so inserting an id mid-enum silently splits a group in two; and every
     saved composition stores parameters by index.
 */
+/// What a host shows. The FFGL name field is char[ 16 ] and NOT null-
+/// terminated, so a longer name is truncated without a word; `cttest --names`
+/// holds this to 16 and `oxbow probe` reads the bundle's copy back.
+constexpr const char* kDisplayName = "SW Containment";
+constexpr const char* kPluginCode  = "CT01";
+
 enum ParamId : unsigned int
 {
 	// -- Preset -------------------------------------------------------------
@@ -177,6 +183,10 @@ constexpr float kMarginFraction = 0.1f;
 
 /// The absorbing layer: e-foldings the fastest wave loses crossing it once.
 constexpr float kSpongeEFolds = 6.0f;
+
+/// The absorbing layer's rate rises as depth^kSpongePower: zero, with zero
+/// slope, where the frame ends.
+constexpr float kSpongePower = 2.0f;
 
 /// The dual-energy switch: where the pressure the total energy gives is less
 /// than this fraction of the kinetic plus magnetic energy, the pressure comes

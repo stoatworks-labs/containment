@@ -1,5 +1,8 @@
 #include "Harness.h"
 
+#include <cstdlib>
+#include <string>
+
 #include <zlib.h>
 
 #include <algorithm>
@@ -10,6 +13,17 @@
 namespace cttest
 {
 int g_failures = 0;
+int g_rasterW   = 0;
+int g_rasterH   = 0;
+
+void ChooseRaster( int& width, int& height )
+{
+	if( g_rasterW > 0 && g_rasterH > 0 )
+	{
+		width  = g_rasterW;
+		height = g_rasterH;
+	}
+}
 
 std::string fmt( const char* format, ... )
 {
@@ -60,9 +74,26 @@ CGLContextObj CreateContext()
 		kCGLPFAAlphaSize, static_cast< CGLPixelFormatAttribute >( 8 ),
 		static_cast< CGLPixelFormatAttribute >( 0 )
 	};
+	//CT_RENDERER=software: Apple's generic float renderer, a different
+	//rasteriser with GL 4.1's legal float slack -- what a GPU-less CI runner
+	//would give -- on this Mac, so "would this hold on another rasteriser?"
+	//can be asked here rather than guessed.
+	const CGLPixelFormatAttribute forcedSoftware[] = {
+		kCGLPFAOpenGLProfile, static_cast< CGLPixelFormatAttribute >( kCGLOGLPVersion_GL4_Core ),
+		kCGLPFARendererID, static_cast< CGLPixelFormatAttribute >( kCGLRendererGenericFloatID ),
+		kCGLPFAColorSize, static_cast< CGLPixelFormatAttribute >( 24 ),
+		kCGLPFAAlphaSize, static_cast< CGLPixelFormatAttribute >( 8 ),
+		static_cast< CGLPixelFormatAttribute >( 0 )
+	};
 	CGLPixelFormatObj format = nullptr;
 	GLint count              = 0;
-	if( CGLChoosePixelFormat( accelerated, &format, &count ) != kCGLNoError || format == nullptr )
+	const char* renderer     = std::getenv( "CT_RENDERER" );
+	if( renderer && std::string( renderer ) == "software" )
+	{
+		if( CGLChoosePixelFormat( forcedSoftware, &format, &count ) != kCGLNoError || format == nullptr )
+			return nullptr;
+	}
+	else if( CGLChoosePixelFormat( accelerated, &format, &count ) != kCGLNoError || format == nullptr )
 		if( CGLChoosePixelFormat( software, &format, &count ) != kCGLNoError || format == nullptr )
 			return nullptr;
 	CGLContextObj context = nullptr;
@@ -245,6 +276,18 @@ Rig::~Rig()
 
 bool Rig::Init( int w, int h, const Floats* picture )
 {
+	//Under --size the output raster changes and the grid does not: the grid
+	//keeps the aspect of the raster the check asked for, so every physics
+	//check runs on exactly the grid it was written for, and only the light's
+	//path to the raster -- emission, glare, composite -- sees the new size.
+	if( g_rasterW > 0 && g_rasterH > 0 )
+		plugin.SetGridRasterForTest( w, h );
+	ChooseRaster( w, h );
+	if( picture && picture->size() != static_cast< size_t >( w ) * h * 4 )
+	{
+		std::fprintf( stderr, "a check's picture is not %dx%d -- it must size it with ChooseRaster()\n", w, h );
+		return false;
+	}
 	width  = w;
 	height = h;
 	FFGLViewportStruct viewport = {};

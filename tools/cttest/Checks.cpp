@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <numeric>
 
 namespace cttest
@@ -687,7 +688,8 @@ int RunStill( const Perturb& perturb )
 	Say( "\n=== still: Mix 0 is the identity, bit for bit\n" );
 	for( int raster : { 0, 1 } )
 	{
-		const int w = raster ? 1280 : 480, h = raster ? 720 : 270;
+		int w = raster ? 1280 : 480, h = raster ? 720 : 270;
+		ChooseRaster( w, h );
 		//Every value a float can hold in 0..1, not just 8-bit steps.
 		Floats card( static_cast< size_t >( w ) * h * 4 );
 		uint32_t x = 0x12345678u;
@@ -830,11 +832,62 @@ int RunGlow( const Perturb& perturb )
 		}
 	}
 	//On the raster: the whole picture's light with Glow 0.6 and Glow 0,
-	//exposure low enough that nothing reaches the shoulder, at a raster twice
-	//the grid (where bilinear resampling keeps a sum exactly). A bloom that
+	//exposure low enough that nothing reaches the shoulder. A bloom that
 	//added its glare would read 1.6.
+	//
+	//The raster samples each grid bilinearly, and a resample conserves a sum
+	//only where every cell collects the same weight from the pixels. At a
+	//raster exactly twice the grid it does (but at the clamped border), and
+	//the check was written there; at 320x180 it does not. So the bound is
+	//the resampler's own, computed on the CPU for these sizes and weighted
+	//by where the light actually is: for each texture the pixels' summed
+	//weight on each cell, W, against its mean, plus 2^-9 a pixel wherever the
+	//filter's fraction is not a multiple of 1/256 -- GL leaves the filter's
+	//sub-texel precision to the implementation, and 8 bits is the common
+	//floor. Ten float roundings a pixel, correlated at worst, on each total.
 	{
-		double totals[ 2 ] = {};
+		struct Axis
+		{
+			std::vector< double > w, q;
+		};
+		auto axis = []( int g, int r ) {
+			Axis out { std::vector< double >( g, 0.0 ), std::vector< double >( g, 0.0 ) };
+			for( int p = 0; p < r; ++p )
+			{
+				const double s = ( p + 0.5 ) * g / r - 0.5, f = s - std::floor( s );
+				const int i0 = static_cast< int >( std::floor( s ) );
+				const int c0 = std::clamp( i0, 0, g - 1 ), c1 = std::clamp( i0 + 1, 0, g - 1 );
+				const double q = f * 256.0 == std::floor( f * 256.0 ) ? 0.0 : std::ldexp( 1.0, -9 );
+				out.w[ c0 ] += 1.0 - f;
+				out.w[ c1 ] += f;
+				out.q[ c0 ] += q;
+				out.q[ c1 ] += q;
+			}
+			return out;
+		};
+		//The relative error of one texture's resampled total, for its light.
+		auto ripple = [ & ]( const Floats& light, int gw, int gh, int rw, int rh ) {
+			const Axis x = axis( gw, rw ), y = axis( gh, rh );
+			const double mean = static_cast< double >( rw ) * rh / ( static_cast< double >( gw ) * gh );
+			double err = 0.0, total = 0.0;
+			for( int j = 0; j < gh; ++j )
+				for( int i = 0; i < gw; ++i )
+				{
+					const size_t o = 4 * ( static_cast< size_t >( j ) * gw + i );
+					const double l = light[ o ] + light[ o + 1 ] + light[ o + 2 ];
+					const double w = x.w[ i ] * y.w[ j ];
+					const double q = x.w[ i ] * y.q[ j ] + x.q[ i ] * y.w[ j ] + x.q[ i ] * y.q[ j ];
+					err += ( std::abs( w - mean ) + q ) * l;
+					total += l;
+				}
+			return total > 0.0 ? err / ( mean * total ) : 0.0;
+		};
+		double totals[ 2 ] = {}, spread[ 2 ] = {};
+		int rw = 512, rh = 512;
+		ChooseRaster( rw, rh );
+		//The grid no bigger than the raster: sampled DOWN, a bilinear filter
+		//skips cells outright and no sum survives at all (the ripple is ~1).
+		const int cells = std::min( rw, rh ) >= 512 ? 256 : 128;
 		for( int k = 0; k < 2; ++k )
 		{
 			TestModel model;
@@ -842,7 +895,7 @@ int RunGlow( const Perturb& perturb )
 			Rig rig;
 			rig.plugin.SetModelForTest( model );
 			rig.Init( 512, 512 );
-			rig.Set( PT_DETAIL, DetailParam( 256 ) );
+			rig.Set( PT_DETAIL, DetailParam( cells ) );
 			rig.Set( PT_EXPOSURE, 0.0f );
 			rig.Set( PT_SPEED, 0.0f );
 			rig.Set( PT_GLOW, k == 0 ? 0.0f : 0.667f );
@@ -857,10 +910,21 @@ int RunGlow( const Perturb& perturb )
 			}
 			if( peak > 0.8 )
 				Check( false, fmt( "the raster check needs every pixel below the shoulder's knee; peak %.3f", peak ) );
+			const int ew = rig.plugin.EmissionWidth(), eh = rig.plugin.EmissionHeight();
+			spread[ k ] = ripple( ReadTexture( rig.plugin.EmissionTextureID(), ew, eh ), ew, eh, rw, rh );
+			if( k == 1 )
+				for( int stage = 0; stage < kGlowStages; ++stage )
+				{
+					const int gw = rig.plugin.GlowWidth(), gh = rig.plugin.GlowHeight();
+					spread[ k ] += ripple( ReadTexture( rig.plugin.GlowTextureID( stage ), gw, gh ), gw, gh, rw, rh );
+				}
 		}
-		Check( std::abs( totals[ 1 ] / totals[ 0 ] - 1.0 ) < 1e-4,
-		       fmt( "the raster's total light with Glow 0.6 is %.6f of it with none (bound 1 +- 1e-4)",
-		            totals[ 1 ] / totals[ 0 ] ) );
+		const double rounding = 2.0 * 10.0 * std::ldexp( 1.0, -24 );
+		const double bound    = ( spread[ 1 ] + spread[ 0 ] ) / ( 1.0 - spread[ 0 ] ) + rounding;
+		Check( std::abs( totals[ 1 ] / totals[ 0 ] - 1.0 ) < bound,
+		       fmt( "at %dx%d, Detail %d, the raster's total light with Glow 0.6 is %.6f of it with none (bound 1 +- %.1e: "
+		            "the resampler's own ripple where the light is, %.1e and %.1e, and rounding)",
+		            rw, rh, cells, totals[ 1 ] / totals[ 0 ], bound, spread[ 1 ], spread[ 0 ] ) );
 	}
 	return g_failures;
 }
@@ -956,31 +1020,58 @@ int RunBalance( const Perturb& perturb )
 		rig.Set( PT_PROFILE, 1.0f );
 		rig.Set( PT_BALL_SIZE, BallSizeParam( 0.15 ) );
 		rig.Set( PT_TEMPERATURE, TemperatureParam( 1.2 ) );
+		if( perturb.balanceEta > 0.0 )
+			rig.Set( PT_RESISTIVITY, ResistivityParam( perturb.balanceEta ) );
 		rig.Render( 1 );
-		const Snapshot s0 = Snapshot::Take( rig.plugin );
-		const Grid& g     = rig.plugin.CurrentGrid();
+		const Grid& g   = rig.plugin.CurrentGrid();
 		const double cx = 0.5 * g.lx, cy = 0.5 * g.ly;
-		//The flux the ball starts with: in 2.5-D Bz / rho is carried with
-		//the fluid and rho chi is conserved, so the integral of Bz chi (the
-		//ball's own flux) is an invariant.
-		double flux0 = 0.0;
-		for( int j = 0; j < s0.ny; ++j )
-			for( int i = 0; i < s0.nx; ++i )
-				flux0 += s0.Bz( i, j ) * s0.Tracer( i, j, 3 ) * s0.dx * s0.dx;
-		const int steps = rig.plugin.StepForTest( 8.0 );
+
+		//The ball's mass, rho chi summed: the scheme conserves it exactly (its
+		//fluxes telescope), and nothing reaches the Open margin in this run.
+		auto ballMass = []( const Snapshot& s ) {
+			double m = 0.0;
+			for( int j = 0; j < s.ny; ++j )
+				for( int i = 0; i < s.nx; ++i )
+					m += s.Rho( i, j ) * s.Tracer( i, j, 3 ) * s.dx * s.dx;
+			return m;
+		};
+		//The core as laid down: a top hat, so everything inside half its
+		//radius is the ball's own rho0, p0, Bz0.
+		const Snapshot s0   = Snapshot::Take( rig.plugin );
+		const double mass0  = ballMass( s0 );
+		const Profile pr0   = Radial( s0, cx, cy, 0.48 );
+		const double rho0   = MeanOver( pr0.r, pr0.rho, 0.0, 0.075 );
+		const double p0     = MeanOver( pr0.r, pr0.p, 0.0, 0.075 );
+		const double bz0    = MeanOver( pr0.r, pr0.bz, 0.0, 0.075 );
+		const double r0     = std::sqrt( mass0 / ( kPi * rho0 ) );
+
+		const int steps  = rig.plugin.StepForTest( 8.0 );
 		const Snapshot s = Snapshot::Take( rig.plugin );
-		//The edge: where the ball marker crosses a half, from its area.
-		double area = 0.0;
+
+		//The edge is the radius of the ball's VOLUME: its mass over its core
+		//density. At pressure balance the ball's plasma, in the core and in
+		//any finger alike, sits on the core's adiabat with the core's Bz / rho,
+		//so it has the core's density everywhere, and M / rho_core is its
+		//volume whatever shape the edge has taken. (The marker's half-contour
+		//is not: the ringing's first deceleration is Rayleigh-Taylor unstable
+		//-- a dense ball, a tenuous background, k across B so nothing holds it
+		//-- and in the mixed layer a cell that is half ball by MASS is only
+		//rho_out / ( rho_in + rho_out ) ~ 13% ball by volume. At Detail 512 the
+		//layer is resolved well enough to finger, and that contour sat 4.5
+		//cells out. It is printed below, not asserted.)
+		const double mass = ballMass( s );
+		const Profile pr  = Radial( s, cx, cy, 0.48 );
+		double halfArea   = 0.0;
 		for( int j = 0; j < s.ny; ++j )
 			for( int i = 0; i < s.nx; ++i )
 				if( s.Tracer( i, j, 3 ) > 0.5 )
-					area += s.dx * s.dx;
-		const double edge = std::sqrt( area / kPi );
-		const Profile pr  = Radial( s, cx, cy, 0.48 );
-		const double pIn  = MeanOver( pr.r, pr.p, 0.0, 0.5 * edge );
-		const double bIn  = MeanOver( pr.r, pr.bz, 0.0, 0.5 * edge );
-		const double pOut = MeanOver( pr.r, pr.p, 1.5 * edge, 2.0 * edge );
-		const double bOut = MeanOver( pr.r, pr.bz, 1.5 * edge, 2.0 * edge );
+					halfArea += s.dx * s.dx;
+		const double rhoCore = MeanOver( pr.r, pr.rho, 0.0, 0.5 * r0 );
+		const double edge    = std::sqrt( mass / ( kPi * rhoCore ) );
+		const double pIn     = MeanOver( pr.r, pr.p, 0.0, 0.5 * edge );
+		const double bIn     = MeanOver( pr.r, pr.bz, 0.0, 0.5 * edge );
+		const double pOut    = MeanOver( pr.r, pr.p, 1.5 * edge, 2.0 * edge );
+		const double bOut    = MeanOver( pr.r, pr.bz, 1.5 * edge, 2.0 * edge );
 		const double totalIn = pIn + 0.5 * bIn * bIn, totalOut = pOut + 0.5 * bOut * bOut;
 		//What ringing is left: the momentum equation balances any total-
 		//pressure difference against rho dv/dt ~ rho v^2 / L, so the largest
@@ -999,22 +1090,44 @@ int RunBalance( const Perturb& perturb )
 		       fmt( "Detail %d: Bz inside %.5f against sqrt( B0^2 + 2 p_out - 2 p_in ) = %.5f%s (%.3f%%; bound %.3f%%)",
 		            cells, bIn, predicted, perturb.balanceNoTwo ? " (without the 2)" : "",
 		            100 * std::abs( bIn / predicted - 1.0 ), 100 * tol ) );
-		//The edge: the ball's flux over the field inside it is its area.
-		const double rPredicted = std::sqrt( flux0 / std::max( bIn, 1e-9 ) / kPi );
-		const double beta1      = Crossing( pr.r, pr.beta, 1.0 );
-		Check( std::abs( edge - rPredicted ) < 3.0 * s.dx,
-		       fmt( "Detail %d: the edge at r = %.4f, flux conservation puts it at %.4f (%.1f cells; bound 3)", cells,
-		            edge, rPredicted, std::abs( edge - rPredicted ) / s.dx ) );
+
+		//Where flux conservation puts the edge. In 2.5-D Bz / rho is carried
+		//with the plasma, so the ball, having expanded by x in area, holds
+		//Bz0 / x: x = Bz0 / Bz_core, and the edge is r0 sqrt( x ), r0 being the
+		//ball's volume radius at ignition. (Not an adiabatic prediction: the
+		//ring-down's compressions converge on the axis and heat the core --
+		//its entropy is printed below -- so p alone would not say where the
+		//edge goes. The flux does, and that is the claim.)
+		//
+		//The tolerance is one cell. A fast wave across B moves Bz and rho in
+		//proportion, so the ringing leaves Bz / rho untouched, and the only
+		//plasma the core does not describe is what the ignition's tanh edge
+		//(half-width 0.75 cells) laid down part-mixed with the background: less
+		//than a cell's width of the ball, so less than a cell of radius.
+		const double x          = bz0 / bIn;
+		const double rPredicted = r0 * std::sqrt( x );
+		Check( std::abs( edge - rPredicted ) < s.dx,
+		       fmt( "Detail %d: the edge (the ball's volume, M / rho_core) at r = %.5f; flux conservation, Bz0 / Bz_core = "
+		            "%.4f, puts it at %.5f%s (%.2f cells; bound 1)",
+		            cells, edge, x, rPredicted, perturb.balanceEta > 0.0 ? " (WITH RESISTIVITY: the field diffuses in)" : "",
+		            std::abs( edge - rPredicted ) / s.dx ) );
+		Say( "  note  Detail %d: the marker's half-contour encloses r = %.4f, %.1f cells outside the edge -- the mixed "
+		     "layer, which that contour counts at ~13%% ball by volume\n",
+		     cells, std::sqrt( halfArea / kPi ), ( std::sqrt( halfArea / kPi ) - edge ) / s.dx );
 		//The beta = 1 contour lies in the edge layer: between where the ball
 		//marker has fallen to 0.9 and to 0.1 (plus a cell each side), with
 		//beta above 1 in the core and below 1 outside. (It is not at the
 		//marker's half: with beta_in ~ 1.4, 2p = B^2 where p has fallen only
 		//a tenth of the way across the numerically widened edge.)
+		const double beta1  = Crossing( pr.r, pr.beta, 1.0 );
 		const double inner = Crossing( pr.r, pr.chi, 0.9 ), outer = Crossing( pr.r, pr.chi, 0.1 );
 		const double betaIn = 2.0 * pIn / ( bIn * bIn ), betaOut = 2.0 * pOut / ( bOut * bOut );
 		Check( beta1 > inner - s.dx && beta1 < outer + s.dx && betaIn > 1.0 && betaOut < 1.0,
 		       fmt( "Detail %d: beta = 1 at r = %.4f, inside the edge layer %.4f..%.4f; beta %.2f inside, %.3f outside",
 		            cells, beta1, inner, outer, betaIn, betaOut ) );
+		const double kIn = pIn / std::pow( rhoCore, kGamma ), kStart = p0 / std::pow( rho0, kGamma );
+		Say( "  note  Detail %d: the core's entropy p / rho^gamma %.5f, %.5f at ignition (%+.3f%%)\n", cells, kIn, kStart,
+		     100.0 * ( kIn / kStart - 1.0 ) );
 	}
 	return g_failures;
 }
@@ -1555,7 +1668,13 @@ int RunResist( const Perturb& perturb )
 	rig.Quiet();
 	rig.Set( PT_DETAIL, DetailParam( 256 ) );
 	rig.Set( PT_SPEED, 0.0f );
-	rig.Set( PT_BOUNDARY, 0.0f );
+	//Wall. Open's margin is an absorbing layer that relaxes towards the
+	//plugin's own ambient plasma (rho 0.1, p 0.005), and this plasma is
+	//rho 100, p 1000: under Open the frame's edge becomes a Riemann problem
+	//whose rarefaction reaches the centre long before the field has diffused
+	//(the bump's peak read -0.996). The bump is 20 cells wide and 128 from
+	//any wall, where Bz is the coils' own 1 to e^-(1.6/0.08)^2.
+	rig.Set( PT_BOUNDARY, 1.0f );
 	rig.Set( PT_POLES, PolesParam( 0 ) );
 	rig.Set( PT_FIELD, FieldParam( 1.0 ) );
 	rig.Set( PT_GUIDE_FIELD, GuideParam( 1.0 ) );
@@ -1702,7 +1821,7 @@ namespace
 {
 struct LongRun
 {
-	double tau, floorFraction, rhoMin, bMax, bMax0, emissionPeak0, emissionPeak;
+	double tau, floorFraction, rhoMin, bRatio, bRatio0, emissionPeak0, emissionPeak;
 	bool finite;
 };
 
@@ -1713,20 +1832,30 @@ LongRun RunLong( bool legacy, double tauTarget )
 	Rig rig;
 	rig.plugin.SetModelForTest( model );
 	rig.Init( 320, 180 );
+	rig.Set( PT_BOUNDARY, static_cast< float >( Boundary::Open ) );
 	rig.Set( PT_SPEED, ParamFromSpeed( 0.84f ) );//0.014 tau_A a frame
 	LongRun out {};
-	auto measure = [ & ]( double& bmax, double& rmin, double& epeak ) {
-		const Snapshot s = Snapshot::Take( rig.plugin );
-		out.finite       = s.Finite();
-		bmax = 0.0;
+	//|B| against the coils' own field over the same cells at the same moment.
+	//The coils turn, and their field in the grid's corners -- nearest the
+	//coil circle -- swings by 2x as a coil passes; a runaway is field the
+	//coils are not making.
+	auto measure = [ & ]( double& bratio, double& rmin, double& epeak ) {
+		const Snapshot s   = Snapshot::Take( rig.plugin );
+		const Coils& coils = rig.plugin.CurrentCoils();
+		out.finite         = s.Finite();
+		double bmax = 0.0, vmax = 0.0;
 		rmin = 1e30;
 		for( int j = 0; j < s.ny; ++j )
 			for( int i = 0; i < s.nx; ++i )
 			{
 				bmax = std::max( bmax, std::sqrt( s.Bx( i, j ) * s.Bx( i, j ) + s.By( i, j ) * s.By( i, j )
 				                                  + s.Bz( i, j ) * s.Bz( i, j ) ) );
+				double bx, by, bz;
+				VacuumField( coils, ( i + 0.5 ) * s.dx, ( j + 0.5 ) * s.dx, bx, by, bz );
+				vmax = std::max( vmax, std::sqrt( bx * bx + by * by + bz * bz ) );
 				rmin = std::min( rmin, s.Rho( i, j ) );
 			}
+		bratio         = bmax / vmax;
 		const Floats e = ReadTexture( rig.plugin.EmissionTextureID(), rig.plugin.EmissionWidth(), rig.plugin.EmissionHeight() );
 		epeak          = 0.0;
 		for( size_t k = 3; k < e.size(); k += 4 )
@@ -1734,17 +1863,17 @@ LongRun RunLong( bool legacy, double tauTarget )
 	};
 	rig.Render( 60 );
 	double r0 = 0.0;
-	measure( out.bMax0, r0, out.emissionPeak0 );
-	out.bMax   = out.bMax0;
+	measure( out.bRatio0, r0, out.emissionPeak0 );
+	out.bRatio = out.bRatio0;
 	out.rhoMin = r0;
 	while( rig.plugin.SimTime() < tauTarget && out.finite )
 	{
 		rig.Render( 100 );
 		double b, r, e;
 		measure( b, r, e );
-		out.bMax         = std::max( out.bMax, b );
+		out.bRatio = std::max( out.bRatio, b );
 		if( std::getenv( "CT_DBG" ) )
-			Say( "    t %.2f  |B| max %.3f  rho min %.4f  emission %.3f\n", rig.plugin.SimTime(), b, r, e );
+			Say( "    t %.2f  |B| max / the coils' %.3f  rho min %.4f  emission %.3f\n", rig.plugin.SimTime(), b, r, e );
 		out.rhoMin       = std::min( out.rhoMin, r );
 		out.emissionPeak = e;
 	}
@@ -1754,66 +1883,135 @@ LongRun RunLong( bool legacy, double tauTarget )
 	return out;
 }
 
-/// An outgoing fast pulse, and what comes back of it. Uniform ambient plasma
-/// in a uniform axial field (so the absorbing layer's reference IS the
-/// background), a small right-going simple wave; returns the largest density
-/// disturbance left in the frame once the pulse has gone and anything the
-/// boundary sent back has had time to arrive, over the incident amplitude.
-double Reflection( bool legacy, double& incident )
+/// What the boundary sends back, and whether it keeps it. A small blob of
+/// compressed ambient plasma at the frame's centre, in a uniform axial field
+/// (so the absorbing layer's reference IS the background), rings out as a
+/// cylindrical fast wave. The same blob is run twice: in the frame as the
+/// plugin bounds it, and in the same frame inside a plasma so big that
+/// nothing from ITS edge can get back by the end. The runs are cell-for-cell
+/// identical until the wave reaches the boundary, so their difference,
+/// anywhere in the frame and at any time, is what the boundary sent back --
+/// and nothing else: not the 2-D wake the wave leaves behind it, not the
+/// scheme's dispersion.
+///
+/// (A plane pulse, the first version, is the wrong probe: it runs along the
+/// top and bottom margins too, the layer damps it there as it should, and
+/// the step that leaves diffracts into the frame. Nothing the ball sends out
+/// runs along an edge from outside the frame.)
+struct Echo
 {
-	TestModel model;
-	model.legacyOpen = legacy;
-	Rig rig;
-	rig.plugin.SetModelForTest( model );
-	rig.Init( 256, 256 );
-	rig.Quiet();
-	rig.Set( PT_DETAIL, DetailParam( 256 ) );
-	rig.Set( PT_SPEED, 0.0f );
-	rig.Set( PT_BOUNDARY, 0.0f );
-	rig.Set( PT_POLES, PolesParam( 0 ) );
-	rig.Set( PT_FIELD, FieldParam( 1.0 ) );
-	rig.Set( PT_GUIDE_FIELD, GuideParam( 1.0 ) );
-	rig.Render( 1 );
-	const Grid& g = rig.plugin.CurrentGrid();
-	const double rho0 = kBackgroundDensity, p0 = kBackgroundPressure, b0 = 1.0, eps = 1e-3, width = 0.03;
+	double incident = 0.0;///< the wave's |dP| as it reaches the frame's edge
+	double first    = 0.0;///< the largest echo in the frame once the wave has left it, over incident
+	double left     = 0.0;///< what is still in the frame two crossings later, over incident
+};
+
+Echo Reflection( bool legacy )
+{
+	const double rho0 = kBackgroundDensity, p0 = kBackgroundPressure, b0 = 1.0, eps = 1e-3;
 	const double cs2 = kGamma * p0 / rho0, cf = std::sqrt( ( kGamma * p0 + b0 * b0 ) / rho0 );
-	const double frameLeft = g.ox * g.dx, frameRight = ( g.ox + g.fx ) * g.dx;
-	const double x0 = 0.5 * ( frameLeft + frameRight ) + 0.25;
-	StateBuilder sb( g.nx, g.ny, kGamma );
-	for( int j = 0; j < g.ny; ++j )
-		for( int i = 0; i < g.nx; ++i )
-		{
-			const double x  = ( i + 0.5 ) * g.dx;
-			const double dr = eps * rho0 * std::exp( -0.5 * ( x - x0 ) * ( x - x0 ) / ( width * width ) );
-			//The linear fast simple wave going +x, perpendicular to B.
-			sb.Set( i, j, rho0 + dr, cf * dr / rho0, 0, 0, p0 + cs2 * dr, 0, 0, b0 * ( 1.0 + dr / rho0 ) );
-		}
-	sb.Load( rig.plugin );
-	//The fast characteristics of a wave across B: w+- = dP_total +- rho c_f du.
-	//The incident pulse is all w+ (2 rho c_f^2 eps rho0 at its peak); what
-	//the boundary sends back is w-. The pulse's own dispersive tail is still
-	//w+, and anything left at rest (an entropy mode) has dP = du = 0 -- so w-
-	//is the reflection and nothing else.
-	auto characteristic = [ & ]( const Snapshot& s, int i, int j, double sign ) {
-		const double dP = ( s.P( i, j ) - p0 ) + 0.5 * ( s.Bz( i, j ) * s.Bz( i, j ) - b0 * b0 );
-		return dP + sign * rho0 * cf * s.U( i, j );
-	};
-	incident = 0.0;
+	const int cells = 256;
+	const double dx = 1.0 / cells, sigma = 6.0 * dx;
+	//The front clears the frame at its half-diagonal; an echo sent back from
+	//anywhere on the edge has crossed the whole frame by tFirst; two more
+	//crossings on, tLeft, an absorbing edge has had two more chances to take
+	//what is left out.
+	const double tClear = ( std::sqrt( 0.5 ) + 4.0 * sigma ) / cf;
+	const double tFirst = tClear + std::sqrt( 2.0 ) / cf;
+	const double tLeft  = tFirst + 2.0 * std::sqrt( 2.0 ) / cf;
+	std::vector< double > times;
+	for( int k = 1; k <= 4; ++k )
+		times.push_back( 0.1 * k / cf );//the front near r = 0.4..0.5: the incident amplitude
+	for( int k = 0; k <= 12; ++k )
+		times.push_back( tClear + ( tFirst - tClear ) * k / 12.0 );
+	times.push_back( tLeft );
+
+	struct Run
 	{
-		const Snapshot s = Snapshot::Take( rig.plugin );
-		for( int i = g.ox; i < g.ox + g.fx; ++i )
-			incident = std::max( incident, std::abs( characteristic( s, i, g.ny / 2, 1.0 ) ) );
+		std::vector< std::vector< double > > dP;//per time, frame cells
+		int fx = 0, fy = 0;
+	};
+	auto run = [ & ]( const TestModel& model ) {
+		Run out;
+		Rig rig;
+		rig.plugin.SetModelForTest( model );
+		rig.Init( 256, 256 );
+		rig.Quiet();
+		rig.Set( PT_DETAIL, DetailParam( cells ) );
+		rig.Set( PT_SPEED, 0.0f );
+		rig.Set( PT_BOUNDARY, static_cast< float >( Boundary::Open ) );
+		rig.Set( PT_POLES, PolesParam( 0 ) );
+		rig.Set( PT_FIELD, FieldParam( 1.0 ) );
+		rig.Set( PT_GUIDE_FIELD, GuideParam( 1.0 ) );
+		rig.Render( 1 );
+		const Grid& g = rig.plugin.CurrentGrid();
+		out.fx = g.fx;
+		out.fy = g.fy;
+		const double cx = ( g.ox + 0.5 * g.fx ) * g.dx, cy = ( g.oy + 0.5 * g.fy ) * g.dx;
+		StateBuilder sb( g.nx, g.ny, kGamma );
+		for( int j = 0; j < g.ny; ++j )
+			for( int i = 0; i < g.nx; ++i )
+			{
+				const double x = ( i + 0.5 ) * g.dx - cx, y = ( j + 0.5 ) * g.dx - cy;
+				const double dr = eps * rho0 * std::exp( -0.5 * ( x * x + y * y ) / ( sigma * sigma ) );
+				//An isentropic compression at rest, frozen flux: pure fast mode.
+				sb.Set( i, j, rho0 + dr, 0, 0, 0, p0 + cs2 * dr, 0, 0, b0 * ( 1.0 + dr / rho0 ) );
+			}
+		sb.Load( rig.plugin );
+		double now = 0.0;
+		for( double t : times )
+		{
+			rig.plugin.StepForTest( t - now );
+			now              = t;
+			const Snapshot s = Snapshot::Take( rig.plugin );
+			std::vector< double > frame;
+			frame.reserve( static_cast< size_t >( g.fx ) * g.fy );
+			for( int j = 0; j < g.fy; ++j )
+				for( int i = 0; i < g.fx; ++i )
+					frame.push_back( ( s.P( g.ox + i, g.oy + j ) - p0 )
+					                 + 0.5 * ( s.Bz( g.ox + i, g.oy + j ) * s.Bz( g.ox + i, g.oy + j ) - b0 * b0 ) );
+			out.dP.push_back( std::move( frame ) );
+		}
+		return out;
+	};
+
+	TestModel bounded;
+	bounded.legacyOpen = legacy;
+	TestModel unbounded;
+	//A margin the wave cannot cross and come back through by tLeft, with no
+	//layer in it: the frame inside an unbounded plasma.
+	unbounded.marginFraction = static_cast< float >( 0.5 * ( cf * tLeft - 0.5 ) + 8.0 * dx );
+	unbounded.spongeEFolds   = 0.0f;
+	const Run a = run( bounded ), b = run( unbounded );
+	Echo echo;
+	if( a.fx != b.fx || a.fy != b.fy )
+	{
+		echo.first = echo.left = 1e30;
+		return echo;
 	}
-	//Long enough for the pulse to reach the grid's far edge and come back
-	//across the whole frame.
-	const double t = ( 2.0 * ( g.lx - x0 ) + 0.5 ) / cf;
-	rig.plugin.StepForTest( t );
-	const Snapshot s = Snapshot::Take( rig.plugin );
-	double worst     = 0.0;
-	for( int j = g.oy; j < g.oy + g.fy; ++j )
-		for( int i = g.ox; i < g.ox + g.fx; ++i )
-			worst = std::max( worst, std::abs( characteristic( s, i, j, -1.0 ) ) );
-	return worst / incident;
+	auto worstAt = [ & ]( size_t k ) {
+		double worst = 0.0;
+		for( size_t o = 0; o < a.dP[ k ].size(); ++o )
+			worst = std::max( worst, std::abs( a.dP[ k ][ o ] - b.dP[ k ][ o ] ) );
+		return worst;
+	};
+	//The incident amplitude: the unbounded run's largest |dP| within 0.1 of
+	//the frame's inscribed circle, from the four snapshots with the front
+	//between r = 0.4 and 0.5 (they are 0.1 apart in radius, so the front is
+	//in that band in at least one).
+	for( size_t k = 0; k < 4; ++k )
+		for( int j = 0; j < a.fy; ++j )
+			for( int i = 0; i < a.fx; ++i )
+			{
+				const double r = std::hypot( ( i + 0.5 - 0.5 * a.fx ) * dx, ( j + 0.5 - 0.5 * a.fy ) * dx );
+				if( r > 0.4 && r <= 0.5 )
+					echo.incident = std::max( echo.incident, std::abs( b.dP[ k ][ static_cast< size_t >( j ) * a.fx + i ] ) );
+			}
+	for( size_t k = 4; k + 1 < times.size(); ++k )
+		echo.first = std::max( echo.first, worstAt( k ) );
+	echo.left  = worstAt( times.size() - 1 );
+	echo.first /= std::max( echo.incident, 1e-30 );
+	echo.left /= std::max( echo.incident, 1e-30 );
+	return echo;
 }
 } // namespace
 
@@ -1821,30 +2019,27 @@ int RunOpen( const Perturb& perturb )
 {
 	Say( "\n=== open: the frame is a window onto a bigger bottle -- waves leave, nothing drains, it lasts\n" );
 	const bool legacy = perturb.legacyOpen;
-	double incident   = 0.0;
-	const double R    = Reflection( legacy, incident );
-	//The bound: the layer takes 6 e-foldings off the fastest wave each way,
-	//so what the grid's outer edge sends back arrives at e^-12 = 6e-6. What
-	//is left is the layer's own gradient, a smooth quadratic ramp 26 cells
-	//deep, and the scheme's dispersion of the pulse (sigma = 8 cells), which
-	//leaves a trailing ripple of the order of the second-order phase error,
-	//( k dx )^2 ~ 1% of the pulse. 2% covers both; an edge that reflects
-	//outright sends back O(10%) and more.
-	Check( R < 0.02, fmt( "%san outgoing fast pulse: %.3f%% of it comes back into the frame as a reflected wave (bound 2%%)",
-	                      legacy ? "OLD ZERO-GRADIENT GHOST, " : "", 100 * R ) );
+	const Echo echo   = Reflection( legacy );
+	Say( "  note  %sa cylindrical fast wave from the frame's centre: the first echo, once the wave has left the frame, "
+	     "is %.2f%% of its amplitude at the edge (a low-frequency wave meeting the layer obliquely)\n",
+	     legacy ? "OLD ZERO-GRADIENT GHOST, " : "", 100 * echo.first );
+	Check( echo.left < echo.first * echo.first,
+	       fmt( "%sthe echo leaves: two frame crossings later %.3f%% is still in the frame (bound: the first echo "
+	            "squared, %.3f%%)",
+	            legacy ? "OLD ZERO-GRADIENT GHOST, " : "", 100 * echo.left, 100 * echo.first * echo.first ) );
 	const LongRun run = RunLong( legacy, 20.0 );
 	//Sound: finite; floors as rare as `--floors` demands; the field no more
 	//than twice the coils' own peak on the grid (a runaway goes past that in
 	//a few tau_A); nowhere emptier than a tenth of the ambient density; and
 	//the fuelled ball still there -- its emission at least a quarter of what
 	//it was once it had settled.
-	const bool ok = run.finite && run.tau >= 20.0 && run.floorFraction < 1e-4 && run.bMax < 2.0 * run.bMax0
+	const bool ok = run.finite && run.tau >= 20.0 && run.floorFraction < 1e-4 && run.bRatio < 2.0
 	                && run.rhoMin > 0.1 * kBackgroundDensity && run.emissionPeak > 0.25 * run.emissionPeak0;
-	Check( ok, fmt( "%sthe default look for %.1f tau_A: finite %s, floors on %.1e of cell-steps (bound 1e-4), |B| peak "
-	                "%.2f against %.2f at the start (bound 2x), rho min %.4f (bound %.3f), the ball's emission %.3f of "
-	                "its settled %.3f (bound a quarter)",
+	Check( ok, fmt( "%sthe default look for %.1f tau_A: finite %s, floors on %.1e of cell-steps (bound 1e-4), |B| at "
+	                "most %.2f of the coils' own peak at the same moment (%.2f at the start; bound 2), rho min %.4f "
+	                "(bound %.3f), the ball's emission %.3f of its settled %.3f (bound a quarter)",
 	                legacy ? "OLD ZERO-GRADIENT GHOST, " : "", run.tau, run.finite ? "yes" : "NO", run.floorFraction,
-	                run.bMax, run.bMax0, run.rhoMin, 0.1 * kBackgroundDensity, run.emissionPeak, run.emissionPeak0 ) );
+	                run.bRatio, run.bRatio0, run.rhoMin, 0.1 * kBackgroundDensity, run.emissionPeak, run.emissionPeak0 ) );
 	return g_failures;
 }
 
@@ -1904,9 +2099,157 @@ int RunPresets( const Perturb& )
 }
 
 //===========================================================================
+// The checks that need no GL context (--offline). A GitHub macOS runner cannot
+// make an accelerated one, so these are what CI can actually run.
+//===========================================================================
+
+// --reference: the Brio-Wu reference the GPU is judged against, on its own.
+int RunReference( const Perturb& perturb )
+{
+	const double gamma = 2.0, bn = 0.75, tEnd = 0.1;
+	const double gammaRun = perturb.referenceGamma > 0.0 ? perturb.referenceGamma : gamma;
+	Say( "\n=== reference: the double-precision Brio-Wu solver's fast heads against the closed-form fast speeds%s\n",
+	     perturb.referenceGamma > 0.0 ? " (THE REFERENCE RUN WITH THE WRONG GAMMA)" : "" );
+	BrioWuReference ref;
+	ref.n     = 8192;
+	ref.gamma = gammaRun;
+	ref.bx    = bn;
+	for( int i = 0; i < ref.n; ++i )
+	{
+		const bool left = ( i + 0.5 ) / ref.n < 0.5;
+		ref.cells.push_back( left ? Prim1 { 1.0, 0, 0, 0, 1.0, 1.0, 0 } : Prim1 { 0.125, 0, 0, 0, 0.1, -1.0, 0 } );
+	}
+	ref.Run( tEnd );
+	std::vector< double > rx, rr, rp, rb;
+	for( int i = 0; i < ref.n; ++i )
+	{
+		rx.push_back( ( i + 0.5 ) / ref.n );
+		rr.push_back( ref.cells[ i ].r );
+		rp.push_back( ref.cells[ i ].p );
+		rb.push_back( ref.cells[ i ].by );
+	}
+	const Features R   = Locate( rx, rr, rp, rb );
+	const double headL = 0.5 - tEnd * FastSpeed( 1.0, 1.0, bn, 1.0, 0.0, gamma );
+	const double headR = 0.5 + tEnd * FastSpeed( 0.125, 0.1, bn, -1.0, 0.0, gamma );
+	//The same bound as --briowu's: 4 cells for where a head is found at 0.1%
+	//of the jump, plus 0.002. A rarefaction's head is a kink, where minmod
+	//drops to first order and smears it diffusively over the run: a width of
+	//sqrt( c dx t / 2 ) = 0.0033 at 8192 cells (c = 1.8, t = 0.1). The kink's
+	//0.1% point moves by less than that width.
+	Check( std::abs( R.fastLeft - headL ) < 4.0 / ref.n + 0.002 && std::abs( R.fastRight - headR ) < 4.0 / ref.n + 0.002,
+	       fmt( "the reference's fast heads sit where the fast speeds put them (%.4f vs %.4f, %.4f vs %.4f; bound %.4f)",
+	            R.fastLeft, headL, R.fastRight, headR, 4.0 / ref.n + 0.002 ) );
+	return g_failures;
+}
+
+// --vacuum: the coils' closed-form field, in double.
+int RunVacuum( const Perturb& perturb )
+{
+	Say( "\n=== vacuum: the coils' field is a vacuum field (no divergence, no current), a multipole, normalised%s\n",
+	     perturb.vacuumSameSign ? " (EVERY COIL CARRYING THE SAME CURRENT)" : "" );
+	const double cx = 0.9, cy = 0.5, radius = 1.2, field = 0.7, h = 1e-3;
+	for( int poles : { 4, 6, 8, 12 } )
+	{
+		Coils coils = MakeCoils( poles, radius, 0.3, field, 0.0, 1.0, cx, cy );
+		if( perturb.vacuumSameSign )
+			for( int k = 0; k < coils.count; ++k )
+				coils.current[ k ] = std::abs( coils.current[ k ] );
+		auto b = [ & ]( double x, double y, double& bx, double& by ) {
+			double bz;
+			VacuumField( coils, x, y, bx, by, bz );
+		};
+		//div B and the in-plane curl (J_z), by central differences at points
+		//inside the frame's reach, against what the differencing itself must
+		//leave. Its truncation is h^2 / 6 times a third derivative somewhere
+		//within h, and a line current's 1/d field has third derivatives up to
+		//6 |I| / d^4: so at most |I| h^2 / ( d - h )^4 per derivative, two
+		//derivatives, summed over the coils. Its rounding: each field value is a sum of N terms of up to
+		//|I| / d, good to N u of that, divided by 2h, twice.
+		Pcg random( 7 + poles );
+		double worst = 0.0;
+		const double u = std::numeric_limits< double >::epsilon();
+		for( int n = 0; n < 400; ++n )
+		{
+			const double a = 2.0 * kPi * random.Uniform(), r = 0.95 * random.Uniform();
+			const double x = cx + r * std::cos( a ), y = cy + r * std::sin( a );
+			double bxp, byp, bxm, bym, bxu, byu, bxd, byd;
+			b( x + h, y, bxp, byp );
+			b( x - h, y, bxm, bym );
+			b( x, y + h, bxu, byu );
+			b( x, y - h, bxd, byd );
+			double truncation = 0.0, scale = 0.0;
+			for( int k = 0; k < coils.count; ++k )
+			{
+				const double d = std::hypot( x - coils.x[ k ], y - coils.y[ k ] );
+				const double near = d - h;
+				truncation += 2.0 * std::abs( coils.current[ k ] ) * h * h / ( near * near * near * near );
+				scale += std::abs( coils.current[ k ] ) / d;
+			}
+			const double allowed = truncation + 2.0 * coils.count * u * scale / h;
+			const double div     = ( bxp - bxm + byu - byd ) / ( 2.0 * h );
+			const double cur     = ( byp - bym - bxu + bxd ) / ( 2.0 * h );
+			worst = std::max( worst, std::max( std::abs( div ), std::abs( cur ) ) / allowed );
+		}
+		const double bound = 1.0;
+		//Near the centre a 2m-pole field grows as r^( m - 1 ), m = N / 2. The
+		//next term of the coils' expansion is ( r / R )^N of the first.
+		const double gap = 0.3 + kPi / poles;
+		double b1x, b1y, b2x, b2y;
+		b( cx + 0.05 * std::cos( gap ), cy + 0.05 * std::sin( gap ), b1x, b1y );
+		b( cx + 0.1 * std::cos( gap ), cy + 0.1 * std::sin( gap ), b2x, b2y );
+		const double slope  = std::log( std::hypot( b2x, b2y ) / std::hypot( b1x, b1y ) ) / std::log( 2.0 );
+		const double expect = poles / 2 - 1;
+		const double sBound = 4.0 * poles * std::pow( 0.1 / radius, poles ) / std::log( 2.0 ) + 1e-9;
+		//Normalised: |B| at radius 0.5 in the first gap is Field.
+		double bnx, bny;
+		b( cx + 0.5 * std::cos( gap ), cy + 0.5 * std::sin( gap ), bnx, bny );
+		const double norm = std::hypot( bnx, bny ) / field - 1.0;
+		const std::vector< double > cusps = CuspAngles( coils, cx, cy, 0.5 );
+		Check( worst < bound && std::abs( slope - expect ) < sBound && std::abs( norm ) < 1e-12
+		           && static_cast< int >( cusps.size() ) == poles,
+		       fmt( "N = %d: div B and J_z at most %.3f of the difference's truncation (bound 1); |B| grows as r^%.6f "
+		            "(r^%.0f expected, bound %.1e); |B| at 0.5 in the gap is Field to %.1e (bound 1e-12); %zu cusps",
+		            poles, worst, slope, expect, sBound, std::abs( norm ), cusps.size() ) );
+	}
+	return g_failures;
+}
+
+// --names: what an operator and `--set` see.
+int RunNames( const Perturb& perturb )
+{
+	Say( "\n=== names: every parameter has a unique, human name, and the display name fits the host's field\n" );
+	ContainmentPlugin plugin;
+	std::vector< std::string > names;
+	int empty = 0, duplicates = 0;
+	for( unsigned int i = 0; i < PT_COUNT; ++i )
+	{
+		const char* name = plugin.GetParamName( i );
+		std::string n    = name ? name : "";
+		if( perturb.namesDuplicate && i == PT_FEED )
+			n = plugin.GetParamName( PT_FUEL );
+		if( n.empty() )
+			++empty;
+		if( std::find( names.begin(), names.end(), n ) != names.end() )
+			++duplicates;
+		names.push_back( n );
+	}
+	Check( empty == 0 && duplicates == 0,
+	       fmt( "%u parameters: %d unnamed, %d duplicate names%s", static_cast< unsigned int >( PT_COUNT ), empty,
+	            duplicates, perturb.namesDuplicate ? " (Feed RENAMED to Fuel's name)" : "" ) );
+	//The FFGL name field is char[ 16 ] and not null-terminated: a longer name
+	//is truncated by the host without a word. The name itself lives in
+	//PluginEntry.cpp, which only the bundle links; oxbow reads it back there.
+	const std::string display = kDisplayName;
+	Check( display.size() <= 16 && display.rfind( "SW ", 0 ) == 0,
+	       fmt( "the display name \"%s\" is %zu bytes (bound 16) and carries the fleet's \"SW \" prefix", display.c_str(),
+	            display.size() ) );
+	return g_failures;
+}
+
+//===========================================================================
 // --negative
 //===========================================================================
-int RunNegative()
+int RunNegative( bool offline )
 {
 	struct Case
 	{
@@ -1929,14 +2272,27 @@ int RunNegative()
 	add( "still", RunStill, "expect one ulp more in one pixel", []( Perturb& p ) { p.stillUlp = true; } );
 	add( "glow", RunGlow, "run the glare as an additive bloom", []( Perturb& p ) { p.additiveGlow = true; } );
 	add( "balance", RunBalance, "expect Bz inside = sqrt( B0^2 - p_in ), without the 2", []( Perturb& p ) { p.balanceNoTwo = true; } );
+	add( "balance", RunBalance, "run with resistivity 1e-3: the field diffuses into the ball", []( Perturb& p ) { p.balanceEta = 1e-3; } );
 	add( "rt", RunRT, "the wrong sign on Curvature", []( Perturb& p ) { p.curvatureSign = -1.0; } );
 	add( "cusp", RunCusp, "expect the leaks towards the coils", []( Perturb& p ) { p.cuspAtCoils = true; } );
 	add( "frozen", RunFrozen, "compare with where the pattern started", []( Perturb& p ) { p.frozenStatic = true; } );
 	add( "quench", RunQuench, "predict with gamma 7/5", []( Perturb& p ) { p.quenchGamma = 1.4; } );
 	add( "resist", RunResist, "expect eta twice as big", []( Perturb& p ) { p.resistFactor = 2.0; } );
 	add( "floors", RunFloors, "run with the floors off", []( Perturb& p ) { p.floorsOff = true; } );
+	add( "reference", RunReference, "run the reference with gamma 5/3 against gamma 2's fast speeds",
+	     []( Perturb& p ) { p.referenceGamma = 5.0 / 3.0; } );
+	add( "vacuum", RunVacuum, "every coil carrying the same current", []( Perturb& p ) { p.vacuumSameSign = true; } );
+	add( "names", RunNames, "Feed given Fuel's name", []( Perturb& p ) { p.namesDuplicate = true; } );
 	add( "open", RunOpen, "Open as it was: the zero-gradient ghost, no margin, no absorbing layer",
 	     []( Perturb& p ) { p.legacyOpen = true; } );
+	//The ones --offline may run: they make no GL context.
+	if( offline )
+		cases.erase( std::remove_if( cases.begin(), cases.end(),
+		                             []( const Case& c ) {
+			                             const std::string n = c.name;
+			                             return n != "reference" && n != "vacuum" && n != "names";
+		                             } ),
+		             cases.end() );
 	if( const char* only = std::getenv( "CT_NEGATIVE" ) )
 		cases.erase( std::remove_if( cases.begin(), cases.end(), [ & ]( const Case& c ) { return std::string( c.name ) != only; } ),
 		             cases.end() );

@@ -23,6 +23,11 @@ int RunMutation( const Perturb& perturb );
 int RunEquilibrium( const Perturb& perturb );
 int RunOpen( const Perturb& perturb );
 int RunPresets( const Perturb& perturb );
-int RunNegative();
+int RunReference( const Perturb& perturb );
+int RunVacuum( const Perturb& perturb );
+int RunNames( const Perturb& perturb );
+/// The negative controls; `offline` runs only those of the checks above that
+/// need no GL context.
+int RunNegative( bool offline = false );
 int RunBench();
 } // namespace cttest

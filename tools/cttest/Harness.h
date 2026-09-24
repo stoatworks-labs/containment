@@ -28,6 +28,14 @@ using Floats = std::vector< float >;
 // Reporting. Every check prints the numbers it compared.
 //---------------------------------------------------------------------------
 extern int g_failures;
+
+/// `--size WxH` given with a check: every rig the check makes renders at this
+/// raster instead of its own (0 = each check's own). The grid is Detail cells
+/// on its short side whatever the raster; the raster sets the grid's aspect
+/// and everything drawn. verify.sh runs every check twice: at each check's
+/// own raster and at 320x180, CI's.
+extern int g_rasterW, g_rasterH;
+void ChooseRaster( int& width, int& height );
 std::string fmt( const char* format, ... );
 void Check( bool condition, const std::string& message );
 void Say( const char* format, ... );
@@ -47,6 +55,10 @@ struct Perturb
 	double curvatureSign  = 1.0;  ///< --rt expects g with this sign
 	bool alfvenOverRho    = false;///< --alfven expects B / rho, not B / sqrt( rho )
 	bool balanceNoTwo     = false;///< --balance expects Bz_in = sqrt( B0^2 - p_in )
+	double balanceEta     = 0.0;  ///< --balance runs with this resistivity (0: ideal, as claimed)
+	double referenceGamma = 0.0;  ///< --reference runs its solver with this gamma (0: the true 2)
+	bool vacuumSameSign   = false;///< --vacuum gives every coil the same current
+	bool namesDuplicate   = false;///< --names sees Feed renamed to Fuel's name
 	bool cuspAtCoils      = false;///< --cusp expects the leaks towards the coils
 	bool conserveCooling  = false;///< --conserve runs with a real energy sink on
 	bool frozenStatic     = false;///< --frozen compares with where the pattern STARTED

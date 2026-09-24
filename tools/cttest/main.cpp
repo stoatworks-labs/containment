@@ -41,8 +41,10 @@
 #include "Harness.h"
 
 #include <algorithm>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cerrno>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -281,7 +283,11 @@ int runPipe( int width, int height, const std::string& scriptPath, int filmFrame
 		{
 			const ssize_t put = write( STDOUT_FILENO, bytes.data() + written, bytes.size() - written );
 			if( put <= 0 )
+			{
+				std::fprintf( stderr, "cttest --pipe: stdout closed after %d frames (%s)\n", index,
+				              put < 0 ? std::strerror( errno ) : "no progress" );
 				return 1;
+			}
 			written += static_cast< size_t >( put );
 		}
 	}
@@ -297,9 +303,15 @@ int dumpShaders( const std::string& directory )
 		v << source.vertex;
 		std::ofstream f( directory + "/" + source.name + ".frag" );
 		f << source.fragment;
+		//A directory that is not there must not read as "wrote 14 programs".
+		if( !v || !f )
+		{
+			std::fprintf( stderr, "cannot write %s into %s\n", source.name, directory.c_str() );
+			return 1;
+		}
 		++n;
 	}
-	std::printf( "wrote %d programs to %s\n", n, directory.c_str() );
+	std::printf( "%d\n", n );
 	return 0;
 }
 } // namespace
@@ -314,6 +326,7 @@ int main( int argc, char** argv )
 	bool beat = false;
 	std::string mode, scriptPath, dumpDirectory;
 	int filmFrames = -1;
+	bool sizeGiven = false, allowNoGL = false;
 
 	for( int i = 1; i < argc; ++i )
 	{
@@ -336,8 +349,12 @@ int main( int argc, char** argv )
 				"  --film N          N frames of the card, raw RGBA frames on stdout\n"
 				"  --script PATH     parameter cues for --pipe/--film: 'frame Name value'\n"
 				"  --dump-shaders D  write every program, as compiled, into directory D\n\n"
+				"  --offline         every check that needs no GL context, and their negative controls\n"
+				"  --allow-no-gl     with a GL check: SKIP loudly, not FAIL, when no context can be made\n"
+				"  --size WxH        with a check: every rig renders at this raster instead of its own\n\n"
 				"  --briowu --alfven --conserve --divb --balance --rt --cusp --frozen --quench\n"
-				"  --resist --floors --still --glow --state --mutation --negative --bench\n" );
+				"  --resist --floors --still --glow --state --open --presets --mutation --negative\n"
+				"  --reference --vacuum --names (offline) --bench\n" );
 			return 0;
 		}
 		else if( argument == "--out" && hasNext )
@@ -386,7 +403,15 @@ int main( int argc, char** argv )
 				width  = std::atoi( value.substr( 0, cross ).c_str() );
 				height = std::atoi( value.substr( cross + 1 ).c_str() );
 			}
+			if( cross == std::string::npos || width < 8 || height < 8 || width > 8192 || height > 8192 )
+			{
+				std::fprintf( stderr, "--size wants WxH, each 8..8192 (got '%s')\n", value.c_str() );
+				return 2;
+			}
+			sizeGiven = true;
 		}
+		else if( argument == "--allow-no-gl" )
+			allowNoGL = true;
 		else if( argument.rfind( "--", 0 ) == 0 )
 			mode = argument.substr( 2 );
 		else
@@ -408,19 +433,65 @@ int main( int argc, char** argv )
 	if( mode == "dump" )
 		return dumpShaders( dumpDirectory );
 
+	//--offline is every check that needs no GL context, listed HERE, in the
+	//one place that knows which those are: a GitHub macOS runner cannot make
+	//an accelerated context, and a workflow that listed them itself would go
+	//stale the first time one was added.
+	{
+		const Perturb none;
+		const std::pair< const char*, int ( * )( const Perturb& ) > offline[] = {
+			{ "names", RunNames }, { "presets", RunPresets }, { "reference", RunReference }, { "vacuum", RunVacuum } };
+		for( const auto& check : offline )
+			if( mode == check.first )
+			{
+				check.second( none );
+				return Verdict();
+			}
+		if( mode == "offline" )
+		{
+			for( const auto& check : offline )
+				check.second( none );
+			const int checks = Verdict();
+			const int negatives = RunNegative( true );
+			std::printf( "\n  OFFLINE: nothing above drew a pixel through a GL driver. The solver, the bottle, the\n"
+			             "  light, every GL check and every GL negative control were NOT run -- tools/verify.sh\n"
+			             "  runs them on a GPU. In CI the shaders were only compiled, by glslc.\n" );
+			return checks != 0 || negatives != 0 ? 1 : 0;
+		}
+	}
+
+	//A check's rigs render at --size when it is given (verify.sh's 320x180
+	//pass); the pipe and the plain render always use it.
+	if( sizeGiven && mode != "pipe" && !mode.empty() && mode != "stats" )
+	{
+		g_rasterW = width;
+		g_rasterH = height;
+	}
+
 	CGLContextObj context = CreateContext();
 	if( context == nullptr )
 	{
+		if( allowNoGL )
+		{
+			std::printf( "  SKIP  could not create an OpenGL 4.1 core context, accelerated or software. --%s was NOT "
+			             "run.\n",
+			             mode.empty() ? "out" : mode.c_str() );
+			return 0;
+		}
 		std::fprintf( stderr, "could not create an OpenGL 4.1 core context\n" );
 		return 1;
 	}
+	if( !mode.empty() && mode != "pipe" && mode != "stats" && mode != "bench" )
+		std::printf( "GL %s / %s%s\n", glGetString( GL_VERSION ), glGetString( GL_RENDERER ),
+		             g_rasterW > 0 ? fmt( ", every rig at %dx%d", g_rasterW, g_rasterH ).c_str() : ", each check at its own raster" );
 
 	const Perturb none;
 	const std::pair< const char*, int ( * )( const Perturb& ) > checks[] = {
 		{ "briowu", RunBrioWu }, { "alfven", RunAlfven }, { "conserve", RunConserve }, { "divb", RunDivB },
 		{ "balance", RunBalance }, { "rt", RunRT },       { "cusp", RunCusp },         { "frozen", RunFrozen },
 		{ "quench", RunQuench }, { "resist", RunResist }, { "floors", RunFloors },     { "still", RunStill },
-		{ "glow", RunGlow },     { "state", RunState },   { "mutation", RunMutation }, { "equilibrium", RunEquilibrium }, { "open", RunOpen }, { "presets", RunPresets },
+		{ "glow", RunGlow },     { "state", RunState },   { "mutation", RunMutation }, { "equilibrium", RunEquilibrium },
+		{ "open", RunOpen },
 	};
 
 	int result = -1;
@@ -434,7 +505,13 @@ int main( int argc, char** argv )
 	if( result < 0 )
 	{
 		if( mode == "pipe" )
+		{
+			//A reader that hangs up (`| head -c 1`, ffmpeg dying) must end the
+			//take with exit 1 and a message, not SIGPIPE's silent 141: write()
+			//then fails and runPipe says so.
+			std::signal( SIGPIPE, SIG_IGN );
 			result = runPipe( width, height, scriptPath, filmFrames, beat, settings );
+		}
 		else if( mode == "negative" )
 			result = RunNegative();
 		else if( mode == "bench" )
