@@ -2,37 +2,26 @@
 
 > **AI-assisted project.** This codebase was created with [Claude](https://claude.com/claude-code)
 > (Anthropic), directed and reviewed by a human author. It has **never been
-> loaded into Resolume**. Everything below was measured by an offline harness
-> that drives the real plugin class, and the shaders it actually compiles, in
-> a headless GL context. `cttest --briowu` runs the Brio–Wu shock tube along x
-> and along y at two resolutions: all five waves land within **0.8 cells** of
-> an independent double-precision reference. `--alfven` measures the speed of
-> an oblique Alfvén wave as B/√ρ to **0.02%**. `--rt` measures magnetic
-> Rayleigh–Taylor growth rates against γ² = gkA − 2(k·B)²/(ρ₁+ρ₂) to
-> **0.4–0.7%**. `--balance` finds the diamagnetic bubble's total pressure flat
-> to **0.02%** and its edge within **0.1 cells** of where flux conservation
-> puts it. `--open` finds the absorbing boundary lets an echo leave and holds
-> the default look for 20 Alfvén times. `--cusp` finds the leaks at the cusp angles the coils predict,
-> for 4, 6 and 8 poles and with the coils turning. `--conserve` holds mass and
-> energy to round-off. `cttest --negative` re-runs every check against a
-> deliberately wrong model and fails if any of them passes, and `--mutation`
-> changes one character of a shipped shader and requires the checks to notice
-> (see [Status](#status)). Every check runs at two output rasters, its own and
-> 320x180. A control sweep fails if any parameter turns out to do nothing.
+> loaded into Resolume**. Everything below was measured by an offline harness that drives the
+> real plugin class, and the shaders it actually compiles, without a host. It checks the solver
+> against the textbook (a shock tube, an Alfvén wave, Rayleigh–Taylor growth, the bubble's
+> pressure balance, the cusp angles, the open boundary, conservation), and against wrong models
+> that every one of those checks has to catch. The numbers, and the list of things I haven't
+> tried yet, are under [Status](#status).
 
-A ball of plasma in a magnetic bottle, for Resolume Arena/Avenue, as an FFGL
-effect. The clip is what the plasma is made of. It swells against the field,
-rings, writhes, leaks out through the cusps and breaks into fingers, and when
-the coils quench it goes up as a fireball.
+A ball of plasma in a magnetic bottle, as an FFGL effect for Resolume Arena and Avenue. Your
+clip is what the plasma's made of. It swells against the field, rings, writhes, leaks out
+through the cusps and breaks into fingers, and when the coils quench it goes up as a fireball.
+So it does all the things fusion engineers lose sleep over, on purpose, on a layer.
 
 ![A luminous green ball of plasma in a black void, writhing, with glowing filaments and tendrils leaking out of it](docs/green-orb.png)
 
 <sub>The Green Orb preset (`docs/green-orb.preset`) about two Alfvén times
 after ignition: the Aurora ramp, a six-pole cusp turning slowly, curvature and
 stirring just past marginal stability, the glare, and field lines lit by the
-plasma on them. Rendered by the plugin's offline harness (`cttest`), not
-captured from Resolume. A 13-second reel (a pellet, a quench, a fresh ball)
-is `docs/demo.mp4`.</sub>
+plasma on them. Rendered by the plugin's offline harness (`cttest`) rather
+than captured from Resolume. There's a 13-second reel (a pellet, a quench, a
+fresh ball) in `docs/demo.mp4`.</sub>
 
 <!-- downloads:start -->
 
@@ -68,24 +57,25 @@ macOS builds are signed and notarised and open normally. The Windows builds are 
 
 [![Containment — a ball of plasma in a magnetic bottle, for Resolume](docs/video-thumb.png)](https://www.youtube.com/watch?v=r5BGDU6JjoI)
 
-*[Watch it](https://www.youtube.com/watch?v=r5BGDU6JjoI) — 80 seconds:
-a ball lit from the clip, the four-, six- and eight-pole stars, the guide field taken away
-and the ball draining through the cusps, Fuel refilling it, Cusp Leak's jets, Rayleigh–Taylor
-fingers, pellets, the quench fireball, the Green Orb and its field lines. Every frame is the
-real plugin's output: an FFGL plugin has no window, so the footage is rendered by this
-repository's own offline harness (`cttest --pipe`, driven by a cue sheet) rather than filmed
-off a screen, and the clips are Resolume's bundled demo media.*
+*[Watch it](https://www.youtube.com/watch?v=r5BGDU6JjoI) (80 seconds): a ball lit from
+the clip, the four-, six- and eight-pole stars, the guide field taken away and the ball
+draining through the cusps, Fuel refilling it, Cusp Leak's jets, Rayleigh–Taylor fingers,
+pellets, the quench fireball, and the Green Orb with its field lines. It's all the plugin's own
+output. An FFGL plugin doesn't have a window to film, so the footage comes from this repo's
+offline harness (`cttest --pipe`, driven by a cue sheet) rather than a screen recording, and
+the clips are Resolume's bundled demo media.*
 
 ## The one idea
 
 **The picture is a ball of hot plasma held in a magnetic bottle, and the
 plasma obeys ideal magnetohydrodynamics.** The clip's colour is frozen into
-the plasma and carried wherever it goes. Nothing is drawn. The solver is
-compressible, 2.5-D (the field and flow have a component along the axis)
-ideal MHD on the GPU: MUSCL–Hancock, the HLLD Riemann solver, GLM divergence
-cleaning. The bottle is the closed-form field of real coils outside the frame.
+the plasma and goes wherever the plasma goes, and nothing is drawn. The solver
+is compressible, 2.5-D ideal MHD on the GPU (2.5-D meaning the field and flow
+have a component along the axis): MUSCL–Hancock, the HLLD Riemann solver and
+GLM divergence cleaning. The bottle is the closed-form field of real coils
+standing outside the frame.
 
-Each part of the request is one term in the equations:
+Each part of the idea is one term in the equations:
 
 - **A ball of plasma.** A hot, dense region. It glows as ρ²√T, the way an
   optically thin plasma radiates (bremsstrahlung), so the tenuous gas round
@@ -98,36 +88,36 @@ Each part of the request is one term in the equations:
 - **Trying to decompose.** Curvature acts as a gravity pointing out of the
   ball, and a dense ball held up by a light field is Rayleigh–Taylor unstable.
   The edge breaks into fingers, and the field's tension decides which
-  wavelengths may grow. A multipole cusp leaks along its N field lines that
-  lead out, and the plasma squirts out there as jets.
+  wavelengths get to grow. A multipole cusp leaks along the N field lines that
+  lead out of it, and the plasma squirts out there as jets.
 
-What falls out of that, rather than being arranged:
+What falls out of that without anyone arranging it:
 
-- **The six-pointed star** of a hot ball in a six-pole cusp, at exactly the
+- **The six-pointed star** of a hot ball in a six-pole cusp, right at the
   angles the coils predict.
 - **The hard, glowing edge** where the plasma meets the field it pushed aside.
 - **Fingers that grow only above a cut-off.** Short wavelengths along the
-  field are held by tension; across it nothing holds them.
+  field are held by tension, and across it nothing holds them.
 - **The fireball.** Quench the coils and the ball free-expands. Its front
   moves at the speed of the exact Riemann solution and never faster than the
   vacuum escape speed 2c_s/(γ−1).
 - **Fuel.** A Pellet drops cold, dense plasma into the middle, and the ball
   has to share its motion with it. A steady Fuel puff keeps a leaking ball
-  topped up, so an open bottle does not simply run down.
+  topped up, so an open bottle doesn't just run down.
 
 ## Controls
 
 - **Preset:** Custom, or one of six whole bottles: Clip Orb (the defaults),
   Green Orb, Guide Field Bubble, Cusp Leak, Rayleigh-Taylor, Quench
   Fireball. A preset lays its values over the controls it owns (the
-  inspector keeps showing the operator's own), and choosing one re-ignites.
+  inspector keeps showing your own), and choosing one re-ignites.
 - **Ball:** Ignite lays down a fresh ball of the given size and position.
   Temperature is its β against the reference field, 0.1 to 50. Profile is
   Gaussian or top hat. Pellet adds cold fuel. Feed is how fast the live clip
   keeps flowing into the ball's footprint (at 0 the ball keeps the frame it
   was lit with). Clip Heats: bright parts of the picture push harder. Fuel
-  tops the ball's footprint back up with fresh gas, so a leaking ball is
-  held up rather than running down.
+  tops the ball's footprint back up with fresh gas, so a leaking ball stays
+  up instead of running down.
 - **Bottle:** Field is the cusp's strength at the frame's inscribed circle.
   Guide Field is the uniform axial field, as a multiple of Field. Poles is 0,
   4, 6, 8 or 12 line currents of alternating sign. Coil Radius, Coil Spin
@@ -139,44 +129,44 @@ What falls out of that, rather than being arranged:
   round the frame and costs more: see the table below.
 - **Plasma:** Speed is Alfvén crossing times per second (0 freezes it).
   Resistivity lets the field diffuse into the ball, a slow containment
-  failure. Cooling: bremsstrahlung losses, so a ball dims and shrinks.
+  failure. Cooling is bremsstrahlung losses, so a ball dims and shrinks.
   Detail is the grid, 128 to 1024 cells on the short side. Drive is a slow,
   divergence-free random stirring about the ball, with Drive Scale its
   wavelength.
 - **Audio:** Audio (Resolume's FFT buffer). Audio Heat heats the ball with the
-  level. Audio Pellets fires a pellet on each onset, and its setting is the
-  detector's sensitivity.
+  level. Audio Pellets fires a pellet on each onset, and its setting is how
+  sensitive the detector is.
 - **Light:** Exposure. Temperature Tint blends the clip's colours towards a
   temperature Ramp: *Hot* (deep red → violet → white) or *Aurora* (the green
   557.7 nm oxygen line, white-green when hot). Glow is a camera's glare that
-  moves light out of the core rather than adding any. Field Lines and Field
+  moves light out of the core without adding any. Field Lines and Field
   Line Count draw contours of the in-plane flux, lit only where plasma sits
   on them. View shows the Picture, or Density, Pressure, |B|, β, Speed or
   ∇·B. Mix.
 
-Simulated time runs in Alfvén crossings, and each frame may take up to 48
+Simulated time runs in Alfvén crossings, and each frame can take up to 48
 substeps. If a frame needs more than that (a very strong Field at a high
-Speed), **simulated time runs slow rather than unstable**, and the
+Speed), **simulated time runs slow rather than going unstable**, and the
 diagnostics log says so.
 
 ## Status
 
-**v0.1.0, 2026-09-24, and honestly early.**
+**v0.1.0, 2026-09-24, and still early days.**
 
-It has **never been loaded into Resolume on macOS**. `oxbow probe` reads
-the bundle the way a host does and finds `SW Containment` / `CT01` / effect.
-Its physics has only been measured on macOS (Apple Silicon, M4 Max).
+It's **never been loaded into Resolume on macOS**. `oxbow probe` reads
+the bundle the way a host does and finds `SW Containment` / `CT01` / effect,
+and the physics has only been measured on macOS (Apple Silicon, M4 Max).
 **On Windows** (2026-09-24), a CI build of v0.1.0 loads, registers and
 renders in Resolume Arena 7.27.1 on win-lab (Mesa llvmpipe, no GPU): all 42
-host controls match the declaration, all 32 testable controls move the
-picture, and Arena's log stays clean, 9 of the fleet gate's 9 checks in two
-runs (the three audio controls cannot be tested there). Software rendering
-says nothing about a GPU or about speed. There is a
+host controls match what the plugin declares, all 32 testable controls move
+the picture and Arena's log stays clean, which is 9 of the fleet gate's 9
+checks, in two runs (the three audio controls can't be tested there).
+Software rendering says nothing about a GPU or about speed. There's a
 [user guide](https://stoatworks-labs.com/software/containment/guide/) and a
 [browser demo](#browser-demo) that runs the plugin's own solver in WebGL2.
-There is no OpenFX port.
+There's no OpenFX port.
 
-What is measured, on this machine:
+What's measured, on this Mac:
 
 | | |
 | --- | --- |
@@ -207,19 +197,19 @@ Render cost (`cttest --bench`, the default look), ms per frame:
 | 512 | 58 | 54 | 55 |
 | 1024 | 205 | 209 | 215 |
 
-The grid, not the raster, sets the cost: the default holds 60 fps at 1080p
-with half the frame to spare (22 substeps a frame). Detail 512 and 1024 are
-not real-time here; at 1024 the 48-substep cap also bites, so simulated time
-runs slow as well. Open costs more than Wall: its hidden margin adds a third
-more cells and puts the grid's corners near the coils, so the default look
-under Open measured 13–16 ms at 1080p. That is why Wall is the default.
+The cost comes from the grid rather than the raster. The default holds 60 fps
+at 1080p with half the frame to spare (22 substeps a frame). Detail 512 and
+1024 aren't real-time here, and at 1024 the 48-substep cap bites as well, so
+simulated time runs slow too. Open costs more than Wall: its hidden margin adds
+a third more cells and puts the grid's corners near the coils, so the default
+look under Open measured 13–16 ms at 1080p. That's why Wall is the default.
 
-What is **not** verified, and is the honest limit of this release:
+What **isn't** verified yet:
 
 - **Open echoes once.** About 12% of a slow wave meeting the edge at a slant
   comes back before it leaves, as it did before the absorbing margin. The
   long run that shows Open holding is 20 Alfvén times, not an evening.
-- **Some terms are modelling choices, not textbook ideal MHD.** The
+- **Some terms are modelling choices rather than textbook ideal MHD.** The
   low-β background takes its pressure from an entropy equation (a
   dual-energy switch), and GLM's cleaning gives back the magnetic energy it
   changes. With a cusp, total energy therefore drifts by 0.2% over 600
@@ -230,7 +220,7 @@ What is **not** verified, and is the honest limit of this release:
 - **2.5-D.** Nothing varies along the axis: no kinks, no sausage modes, no
   tokamak.
 - **Brio–Wu's reference is computed**, by an independent solver in the
-  harness. There was no machine-readable published table to hand.
+  harness. There wasn't a machine-readable published table to hand.
 
 ## Browser demo
 
@@ -239,12 +229,13 @@ runs the plugin's own GLSL solver in the browser: every shader piece in
 `source/Shaders.cpp`, unedited and assembled into the same fourteen programs,
 on RGBA32F state in WebGL2 (it needs `EXT_color_buffer_float`). The CPU half
 (the control conversions, the coils, the stirring, the presets, the substep
-plan and the frame sequence) is ported to JavaScript, which only a reader
-checks. It is not the plugin, and says so: it **starts at Detail 128**, not
-the plugin's 256, so a browser keeps up (256 and above are on the dropdown),
-and the audio controls are absent because a browser has no FFT buffer. The
-page lists every other difference at its foot. `demo/tools/check_shaders.py`,
-run by `tools/verify.sh`, fails if the page's copy drifts by one character.
+plan and the frame sequence) is ported to JavaScript, and only a person
+reading it checks that port. It isn't the plugin, and it says so: it **starts
+at Detail 128** rather than the plugin's 256, so a browser keeps up (256 and
+above are on the dropdown), and the audio controls are missing because a
+browser hasn't got an FFT buffer. The page lists every other difference at
+the bottom. `demo/tools/check_shaders.py`, run by `tools/verify.sh`, fails if
+the page's copy drifts by one character.
 
 ## Build
 
@@ -258,7 +249,7 @@ builds are universal (arm64 + x86_64); Windows needs GLEW via vcpkg.
 
 ## Building and testing
 
-The offline harness renders the real plugin class headlessly:
+The offline harness renders the real plugin class without a host:
 
     ./build/cttest --out /tmp/frame.png --frames 300     a frame of the default look
     ./build/cttest --preset docs/green-orb.preset --out /tmp/orb.png
@@ -300,4 +291,4 @@ MIT.
 The numerics and the physics are textbook: ideal MHD, MUSCL–Hancock, Miyoshi
 and Kusano's HLLD, Dedner's GLM cleaning, the dual-energy switch, the
 magnetic Rayleigh–Taylor dispersion relation, and the multipole field of line
-currents. Nothing is copied from anyone's source.
+currents. Nothing's copied from anyone's source.

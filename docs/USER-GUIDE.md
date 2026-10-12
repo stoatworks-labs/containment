@@ -1,12 +1,14 @@
 # Containment user guide
 
 Containment is **a ball of hot plasma held in a magnetic bottle, for [Resolume](https://resolume.com)
-Arena and Avenue**, as an FFGL effect. Your clip is what the plasma is made of. It is not a
-particle system or a painted glow: the plasma obeys the equations of ideal
+Arena and Avenue**, as an FFGL effect. Your clip is what the plasma is made of.
+
+There's no particle system and no painted glow in it. The plasma obeys the equations of ideal
 magnetohydrodynamics, solved on the GPU every frame, and the bottle is the field of real coils
 standing outside the picture. The ball swells against the field, rings, writhes, leaks out
-through the gaps between the coils and breaks into fingers; switch the coils off and it goes up
-as a fireball. None of that is drawn. It all falls out of the one set of equations.
+through the gaps between the coils and breaks into fingers, and if you switch the coils off it
+goes up as a fireball. None of that is drawn. It all falls out of the one set of equations, and
+it's the same misbehaviour fusion engineers have spent decades fighting.
 
 ![A luminous green ball of plasma in a black void, writhing, with glowing filaments and tendrils leaking out of it](green-orb.png)
 
@@ -15,23 +17,23 @@ harness rather than captured from Resolume: the Aurora colour ramp, a six-pole b
 slowly, curvature and stirring just past the point where the edge stays smooth, the glare, and
 field lines lit by the plasma sitting on them.*
 
-> **Before you rely on this:** released at **v0.1.0**, and honestly early. The physics is
-> measured rather than asserted, by a harness that drives the real plugin class and the shaders
-> it compiles, headlessly, and reads each claim back out of the state it made. The Brio–Wu shock
-> tube, along either axis, puts all five waves within 0.8 cells of an independent
-> double-precision solution; an oblique Alfvén wave travels at B/√ρ to 0.02%; magnetic
-> Rayleigh–Taylor fingers grow at the textbook rate to 0.4–0.7%, and do not grow where field-line
-> tension says they cannot; a hot ball in a four-, six- or eight-pole bottle leaks within 0.4° of
-> the cusp angles the coils predict; the quench fireball's front moves at the exact Riemann
-> solution's speed to two cells; mass and energy are conserved to round-off in a closed vessel;
-> and eighteen deliberately wrong models, plus a one-character change to a shipped shader, are
-> all shown to make those checks fail. All 33 controls are shown to change the picture. It has
-> **never been loaded into Resolume on macOS**, and has only been measured on one Mac's GPU
-> (Apple M4 Max).
+> **Before you rely on this:** it's released at **v0.1.0**, and it's still early days. I've
+> measured the physics rather than taking it on trust, with a harness that drives the real plugin
+> class and the shaders it compiles without a host, and reads each claim back out of the state it
+> made. The Brio–Wu shock tube, along either axis, puts all five waves within 0.8 cells of an
+> independent double-precision solution. An oblique Alfvén wave travels at B/√ρ to 0.02%.
+> Magnetic Rayleigh–Taylor fingers grow at the textbook rate to 0.4–0.7%, and don't grow where
+> field-line tension says they can't. A hot ball in a four-, six- or eight-pole bottle leaks
+> within 0.4° of the cusp angles the coils predict. The quench fireball's front moves at the
+> exact Riemann solution's speed to two cells, mass and energy are conserved to round-off in a
+> closed vessel, and eighteen models that are wrong on purpose, plus a one-character change to a
+> shipped shader, all make those checks fail. All 33 controls are shown to change the picture.
+> It's **never been loaded into Resolume on macOS**, and it's only been measured on one Mac's
+> GPU (Apple M4 Max).
 > On Windows, a CI build of v0.1.0 loads, registers and renders in Resolume Arena 7.27.1, with
 > all 42 host controls matching what the plugin declares, and all 32 controls that can be tested
-> there move the picture (the three audio controls cannot: the test box has no sound device) — in
-> two runs, on software rendering, so that says nothing about a GPU or about speed.
+> there move the picture (the three audio controls can't, as the test box has no sound device).
+> That's two runs, on software rendering, so it says nothing about a GPU or about speed.
 > Try it on a spare layer before you put it in a show.
 >
 > This codebase was created with AI assistance, directed and reviewed by a human author.
@@ -51,9 +53,9 @@ Windows  %USERPROFILE%\Documents\Resolume Arena\Extra Effects\
 Avenue uses the same layout under its own folder name. The effect then appears in the effects
 browser as **SW Containment**.
 
-The macOS download is a universal build (Apple silicon and Intel), as a `.dmg` or a `.zip`. It is
-**Developer ID-signed and notarised**, so the bundle simply loads. The Windows download is an x64
-installer or a `.zip`. It is not code-signed, so the installer trips SmartScreen once:
+The macOS download is a universal build (Apple silicon and Intel), as a `.dmg` or a `.zip`. It's
+**Developer ID-signed and notarised**, so the bundle just loads. The Windows download is an x64
+installer or a `.zip`. It isn't code-signed, so the installer trips SmartScreen once:
 **More info** → **Run anyway**.
 
 It needs a GPU that can render to 32-bit float textures, which every GPU Resolume supports can.
@@ -63,9 +65,9 @@ It needs a GPU that can render to 32-bit float textures, which every GPU Resolum
 ## A ball of plasma in a magnetic bottle
 
 A plasma is a gas hot enough that its atoms have come apart into charged particles, and charged
-particles cannot cross a magnetic field: they spiral round the field lines. So a field can hold a
-plasma the way a bottle holds a gas. That is the whole idea of magnetic confinement, and it is
-also why it is hard. Everything below is one term in the equations:
+particles can't cross a magnetic field: they spiral round the field lines instead. So a field can
+hold a plasma the way a bottle holds a gas. That's magnetic confinement in a sentence, and it's
+also why it's so hard to do. Each of the things below is one term in the equations:
 
 - **The ball** is a region that is hot and dense. It glows as ρ²√T, the way a thin, hot plasma
   radiates (bremsstrahlung), so the tenuous gas around it is almost black.
@@ -77,7 +79,7 @@ also why it is hard. Everything below is one term in the equations:
 - **It tries to come apart.** The curve of a real bottle's field acts like a gravity pointing out
   of the ball, and a heavy fluid held up by a light one is unstable (Rayleigh–Taylor). The edge
   breaks into fingers, and the field's tension decides which sizes of finger may grow. A
-  multipole bottle has gaps between its coils — the **cusps** — and the plasma squirts out through
+  multipole bottle has gaps between its coils (the **cusps**), and the plasma squirts out through
   them as jets.
 - **The fireball.** Quench the coils and nothing holds it: it expands freely, and its front moves
   at the speed the exact solution of that problem gives.
@@ -88,7 +90,7 @@ the picture inside it stays current.
 
 ### What the numbers mean
 
-Inside, the plugin works in the units plasma physicists use, and some controls speak them:
+Inside, the plugin works in the units plasma physicists use, and some of the controls do too:
 
 - **Distance:** the frame's height is 1.
 - **Field:** in units of a reference field. Field 1 is the reference.
@@ -130,9 +132,9 @@ Then:
    of the Aurora ramp, with the glare and field lines. While a preset is chosen it owns most of the
    sliders above; set Preset back to **Custom** to play with them again.
 
-**Changing a control does not re-ignite**, except Preset, Detail and Boundary. The ball you
-have carries on under the new field, which is usually the interesting part: turn Field up and watch it get squeezed.
-Ignite to start clean.
+**Changing a control doesn't re-ignite**, except Preset, Detail and Boundary. The ball you
+have carries on under the new field, which is usually the interesting bit: turn Field up and
+watch it get squeezed. Ignite to start clean.
 
 Every slider is declared to the host as 0 to 1, so the host only knows its position. The value
 each position stands for is given with each control below.
@@ -142,7 +144,7 @@ each position stands for is given with each control below.
 ## The presets
 
 **Preset** is at the top. **Custom** means the controls are the truth. Any other row lays a whole
-bottle over the controls it owns, and **choosing one re-ignites**. Resolume cannot be told to move
+bottle over the controls it owns, and **choosing one re-ignites**. Resolume can't be told to move
 its own sliders, so while a preset is chosen the inspector keeps showing your own values for the
 columns the preset owns, and those sliders do nothing until you go back to Custom. A preset owns
 the ball's size, temperature and profile, Feed, Clip Heats and Fuel; the whole Bottle group;
@@ -170,7 +172,7 @@ clip, and brightening them means copying the preset's values into Custom.
 runs along them. Rendered by the offline harness.*
 
 **Cusp Leak runs slow.** With no guide field and Open's hidden margin, the field at the grid's
-corners is strong, so the step the solver may take is short, and the preset hits the limit of 48
+corners is strong, so the step the solver can take is short, and the preset hits the limit of 48
 steps a frame on every frame. Simulated time then runs slower than Speed asks (it never goes
 unstable), and it costs more than the default. See **Performance**.
 
@@ -311,8 +313,8 @@ level. Off by default. Loud passages swell the ball and push it against the fiel
 **Audio Pellets** — fires a Pellet on each onset (a hit in the music). The slider is the
 detector's sensitivity; 0, the default, is off.
 
-Both are untested against real audio in a host: the plugin assumes Resolume's 64 FFT bands are
-spread evenly from 0 Hz to half the sample rate, which nobody in the fleet has measured.
+Neither has been tested against real audio in a host. The plugin assumes Resolume's 64 FFT bands
+are spread evenly from 0 Hz to half the sample rate, and nobody in the fleet has measured that.
 
 ---
 
@@ -352,8 +354,8 @@ none.
 **View** — what is shown: the **Picture** (the default), or a false-colour map of one of the
 simulation's quantities: **Density**, **Pressure**, **|B|** (field strength), **β**, **Speed**
 (the flow's) and **∇·B** (the divergence of the field, which should be zero; this shows the
-solver's own error, which it keeps near zero). The maps are for seeing what is happening, and a
-look in their own right.
+solver's own error, which it keeps near zero). The maps are for seeing what's going on, and
+they're a look in their own right.
 
 **Mix** — the plasma's light against your untouched clip, **0 to 1**, 1 by default. At 0 the
 output is your clip exactly, pixel for pixel. The plasma keeps running underneath whatever Mix
@@ -368,9 +370,9 @@ the same motion at 30 fps and at 60. Inside a frame it takes as many short steps
 needs to stay stable: each step is limited by the fastest wave anywhere in the grid, and the
 fastest waves are where the field is strongest. At the defaults that is about 22 steps a frame.
 
-A frame may take **at most 48 steps**. If the plasma needs more than that — a strong Field at a
-high Speed, a fine Detail, Cusp Leak — **simulated time runs slower than Speed asks, never
-unstable**. The picture carries on smoothly; it just moves slower than the number says. The
+A frame can take **at most 48 steps**. If the plasma needs more than that (a strong Field at a
+high Speed, a fine Detail, Cusp Leak), **simulated time runs slower than Speed asks, and never
+goes unstable**. The picture carries on smoothly, it just moves slower than the number says. The
 plugin's log records when that happens.
 
 ![Quench Fireball a moment after the quench: a violet ring expanding from where the ball was](quench.png)
@@ -395,7 +397,7 @@ step runs six passes:
    cooling and the boundary.
 
 Where the field dominates and the gas is thin, the gas pressure is a tiny difference of large
-numbers; there the plugin takes it from an entropy carried with the flow instead (a dual-energy
+numbers, so there the plugin takes it from an entropy carried with the flow instead (a dual-energy
 switch), and elsewhere energy decides. The bottle's field is the closed-form field of the coils,
 computed exactly, and the lines drawn by Field Lines come from a potential solved once a frame.
 
@@ -405,7 +407,7 @@ exposure and a soft shoulder that rolls highlights off rather than clipping them
 Some parts are modelling choices rather than textbook ideal MHD, and the repository's AGENTS.md
 says why each is there: the dual-energy switch, the energy the cleaning gives back, the coils'
 changes carried through the vessel, curvature scaled by temperature, Open's absorbing margin, and
-Fuel. It is 2.5-D: nothing varies along the axis, so there are no kinks and no tokamak.
+Fuel. It's 2.5-D: nothing varies along the axis, so there are no kinks and no tokamak.
 
 ---
 
@@ -422,7 +424,7 @@ frame:
 | 1024 | 205 | 209 | 215 |
 
 **The grid sets the cost, not the resolution.** The default holds 60 fps at 1080p with half the
-frame to spare. Detail 512 and 1024 are not real-time there, and at 1024 the 48-step limit bites
+frame to spare. Detail 512 and 1024 aren't real-time there, and at 1024 the 48-step limit bites
 as well, so simulated time also runs slow. **Open** costs more than Wall (about 13–16 ms at 1080p
 for the default look), and anything that makes the field stronger at the corners (a high Field,
 no guide field, Cusp Leak) costs more steps. Nothing was timed inside Resolume, and nothing was
@@ -435,7 +437,7 @@ timed on a Windows GPU.
 **The ball is barely visible.** The plasma is made of the clip, so a dark clip makes a dim
 ball. Raise Exposure, or put it on something brighter.
 
-**It is black.** The ball may have drained away: an Open bottle with no Fuel runs down, and so
+**It's black.** The ball may have drained away: an Open bottle with no Fuel runs down, and so
 does a ball with Cooling up. Press Ignite. Check Mix and Exposure.
 
 **Nothing moves.** Speed is at 0, which freezes the plasma. Or the ball has settled: raise
