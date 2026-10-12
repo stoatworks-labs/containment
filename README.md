@@ -2,7 +2,8 @@
 
 > **AI-assisted project.** This codebase was created with [Claude](https://claude.com/claude-code)
 > (Anthropic), directed and reviewed by a human author. It has **never been
-> loaded into Resolume**. Everything below was measured by an offline harness that drives the
+> loaded into Resolume on a Mac**, only into Arena on Windows, on software rendering.
+> Everything below was measured by an offline harness that drives the
 > real plugin class, and the shaders it actually compiles, without a host. It checks the solver
 > against the textbook (a shock tube, an Alfvén wave, Rayleigh–Taylor growth, the bubble's
 > pressure balance, the cusp angles, the open boundary, conservation), and against wrong models
