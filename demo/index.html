@@ -8,16 +8,42 @@
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="./vendor/kit.css" />
     <link rel="canonical" href="https://containment-demo.stoatworks-labs.com/" />
+    <meta name="project-page" content="https://stoatworks-labs.com/software/containment/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Stoatworks Labs" />
+    <meta property="og:title" content="Containment — browser demo | Stoatworks Labs" />
+    <meta property="og:description" content="Try the Containment plasma FFGL plugin for Resolume in your browser. The plugin's own 2.5-D ideal MHD solver (MUSCL-Hancock, HLLD, GLM) runs as WebGL2 passes on its own shaders, with its CPU half ported to JavaScript. Starts at Detail 128, not the plugin's 256." />
+    <meta property="og:url" content="https://containment-demo.stoatworks-labs.com/" />
+    <meta property="og:image" content="https://stoatworks-labs.com/thumbs/containment.png" />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="720" />
+    <meta property="og:image:alt" content="Containment" />
+    <meta name="twitter:card" content="summary_large_image" />
   </head>
   <body>
     <main id="demo">
       <noscript>
+        <h1>Containment</h1>
+        <p>
+          An FFGL effect that turns your clip into a ball of hot plasma held in
+          a magnetic bottle. The plasma follows 2.5-D compressible ideal
+          magnetohydrodynamics, solved on the GPU every frame, and the bottle is
+          the closed-form field of real coils standing outside the picture. The
+          ball swells against the field, rings, writhes, leaks through the cusps
+          and breaks into fingers, and if you quench the coils it goes up as a
+          fireball.
+        </p>
         <p>
           This demo runs the plugin's own MHD solver in your browser, so it
           needs JavaScript and WebGL2 with float render targets. The plugin
           itself, its source and its downloads are on
           <a href="https://github.com/stoatworks-labs/containment">its repository</a>.
         </p>
+        <ul>
+          <li><a href="https://stoatworks-labs.com/software/containment/">Project page and downloads</a></li>
+          <li><a href="https://stoatworks-labs.com/software/containment/guide/">User guide</a></li>
+          <li><a href="https://github.com/stoatworks-labs/containment">Source on GitHub</a></li>
+        </ul>
       </noscript>
     </main>
 
